@@ -55,6 +55,7 @@ services:
       APP_PHASE: P0
       HEALTH_TIMEOUT_SECONDS: 2.0
       DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
+      MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-squad}:${POSTGRES_PASSWORD:-changeme-local}@postgres:5432/${POSTGRES_DB:-squad}
       REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"

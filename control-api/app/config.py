@@ -9,6 +9,7 @@ class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     app_phase: str = os.getenv("APP_PHASE", "P0")
     database_url: str = os.getenv("DATABASE_URL", "")
+    migration_database_url: str = os.getenv("MIGRATION_DATABASE_URL", "")
     redis_url: str = os.getenv("REDIS_URL", "")
     health_timeout_seconds: float = float(os.getenv("HEALTH_TIMEOUT_SECONDS", "2.0"))
 

@@ -17,7 +17,7 @@ class DependencyStatus:
     detail: str | None = None
 
 
-def _normalize_postgres_dsn(dsn: str) -> str:
+def normalize_postgres_dsn(dsn: str) -> str:
     if dsn.startswith("postgresql+asyncpg://"):
         return dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
 
@@ -38,7 +38,7 @@ async def check_postgres() -> DependencyStatus:
     conn: asyncpg.Connection | None = None
     try:
         conn = await asyncio.wait_for(
-            asyncpg.connect(_normalize_postgres_dsn(settings.database_url)),
+            asyncpg.connect(normalize_postgres_dsn(settings.database_url)),
             timeout=settings.health_timeout_seconds,
         )
         value = await conn.fetchval("SELECT schema_version FROM platform_bootstrap LIMIT 1;")

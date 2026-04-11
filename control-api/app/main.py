@@ -1,13 +1,35 @@
+from contextlib import asynccontextmanager
+import logging
+
 from fastapi import FastAPI
 import asyncio
 
 from app.config import settings
+from app.db import ensure_database_ready
 from app.health import check_postgres, check_redis
+from app.routers.projects import router as projects_router
+from app.routers.revisions import router as revisions_router
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        await ensure_database_ready()
+    except Exception as exc:
+        logger.warning("Database migrations were not applied during startup: %s", exc)
+
+    yield
 
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
+    lifespan=lifespan,
 )
+
+app.include_router(projects_router)
+app.include_router(revisions_router)
 
 
 @app.get("/")
