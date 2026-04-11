@@ -7,6 +7,7 @@ from fastapi import APIRouter
 
 from app.db import open_ready_connection
 from app.models import EntityType, RevisionListResponse, RevisionReason, RevisionResponse
+from app.revision_utils import json_array
 
 router = APIRouter(prefix="/api/v1/revisions", tags=["revisions"])
 
@@ -43,7 +44,7 @@ async def list_revisions(entity_type: EntityType, entity_id: UUID) -> RevisionLi
             reason=RevisionReason(
                 category=row["reason_category"],
                 detail=row["reason_detail"],
-                references=_json_value(row["reason_references"]) or [],
+                references=json_array(_json_value(row["reason_references"])),
             ),
             before_snapshot=_json_value(row["before_snapshot"]),
             after_snapshot=_json_value(row["after_snapshot"]),

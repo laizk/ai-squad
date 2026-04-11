@@ -9,6 +9,7 @@ from app.db import ensure_database_ready
 from app.health import check_postgres, check_redis
 from app.routers.projects import router as projects_router
 from app.routers.revisions import router as revisions_router
+from app.routers.team_members import router as team_members_router
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ app = FastAPI(
 
 app.include_router(projects_router)
 app.include_router(revisions_router)
+app.include_router(team_members_router)
 
 
 @app.get("/")

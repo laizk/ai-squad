@@ -93,3 +93,119 @@ def test_project_update_with_no_changes_returns_400(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "No project fields changed"
+
+
+def test_team_member_create_update_and_revisions(
+    client: httpx.Client, team_member_payload: dict[str, object]
+) -> None:
+    create_response = client.post("/team-members", json=team_member_payload)
+    create_response.raise_for_status()
+    created = create_response.json()
+
+    assert created["name"] == team_member_payload["name"]
+    assert created["role"] == "pm"
+    assert created["current_version"] == 1
+    assert created["is_active"] is True
+
+    member_id = created["id"]
+
+    list_response = client.get("/team-members")
+    list_response.raise_for_status()
+    items = list_response.json()["items"]
+    assert any(item["id"] == member_id for item in items)
+
+    update_payload = {
+        "model": "mistral-nemo:12b",
+        "is_active": False,
+        "reason": {
+            "category": "fix",
+            "detail": "Updating the integration-test team member to verify version increments and revisions.",
+            "references": [f"team_member:{member_id}"],
+        },
+    }
+    update_response = client.patch(f"/team-members/{member_id}", json=update_payload)
+    update_response.raise_for_status()
+    updated = update_response.json()
+
+    assert updated["current_version"] == 2
+    assert updated["model"] == "mistral-nemo:12b"
+    assert updated["is_active"] is False
+
+    revisions_response = client.get(f"/team-members/{member_id}/revisions")
+    revisions_response.raise_for_status()
+    revisions = revisions_response.json()["revisions"]
+
+    assert len(revisions) == 2
+    assert revisions[0]["revision_number"] == 1
+    assert revisions[1]["revision_number"] == 2
+    assert revisions[1]["before_snapshot"]["is_active"] is True
+    assert revisions[1]["after_snapshot"]["is_active"] is False
+
+
+def test_project_assignment_create_disable_and_revisions(
+    client: httpx.Client,
+    project_payload: dict[str, object],
+    team_member_payload: dict[str, object],
+) -> None:
+    project_response = client.post("/projects", json=project_payload)
+    project_response.raise_for_status()
+    project = project_response.json()
+
+    member_response = client.post("/team-members", json=team_member_payload)
+    member_response.raise_for_status()
+    member = member_response.json()
+
+    assignment_payload = {
+        "team_member_id": member["id"],
+        "model_override": "mistral-nemo:12b",
+        "provider_override": "ollama",
+        "reason": {
+            "category": "initial_creation",
+            "detail": "Assigning the integration-test team member to the integration-test project.",
+            "references": [f"project:{project['id']}", f"team_member:{member['id']}"],
+        },
+    }
+    assignment_response = client.post(f"/projects/{project['id']}/team", json=assignment_payload)
+    assignment_response.raise_for_status()
+    assignment = assignment_response.json()
+
+    assert assignment["project_id"] == project["id"]
+    assert assignment["team_member_id"] == member["id"]
+    assert assignment["current_version"] == 1
+    assert assignment["is_enabled"] is True
+
+    team_list_response = client.get(f"/projects/{project['id']}/team")
+    team_list_response.raise_for_status()
+    team_items = team_list_response.json()["items"]
+    assert any(item["id"] == assignment["id"] for item in team_items)
+
+    disable_payload = {
+        "is_enabled": False,
+        "disable_reason": "Disabled by integration test.",
+        "reason": {
+            "category": "scope_change",
+            "detail": "Disabling the integration-test assignment to verify lifecycle and revision behavior.",
+            "references": [f"project_assignment:{assignment['id']}"],
+        },
+    }
+    disable_response = client.patch(
+        f"/projects/{project['id']}/team/{member['id']}",
+        json=disable_payload,
+    )
+    disable_response.raise_for_status()
+    disabled = disable_response.json()
+
+    assert disabled["current_version"] == 2
+    assert disabled["is_enabled"] is False
+    assert disabled["disabled_at"] is not None
+    assert disabled["disable_reason"] == "Disabled by integration test."
+
+    revisions_response = client.get(f"/revisions/project_assignment/{assignment['id']}")
+    revisions_response.raise_for_status()
+    revisions = revisions_response.json()["revisions"]
+
+    assert len(revisions) == 2
+    assert revisions[0]["revision_number"] == 1
+    assert revisions[1]["revision_number"] == 2
+    assert revisions[1]["before_snapshot"]["is_enabled"] is True
+    assert revisions[1]["after_snapshot"]["is_enabled"] is False

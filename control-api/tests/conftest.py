@@ -30,3 +30,22 @@ def project_payload() -> dict[str, object]:
             "references": [f"test:{suffix}"],
         },
     }
+
+
+@pytest.fixture
+def team_member_payload() -> dict[str, object]:
+    suffix = uuid4().hex[:8]
+    return {
+        "name": f"pm-{suffix}",
+        "role": "pm",
+        "display_name": f"PM {suffix}",
+        "description": "Team member created by integration tests against the live control API.",
+        "skills": ["planning", "requirements"],
+        "provider": "ollama",
+        "model": "qwen2.5-coder:14b",
+        "reason": {
+            "category": "initial_creation",
+            "detail": "Creating an integration-test team member to verify CRUD and revision behavior.",
+            "references": [f"test:{suffix}"],
+        },
+    }

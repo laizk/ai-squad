@@ -1,27 +1,28 @@
 from __future__ import annotations
 
 import json
-from datetime import timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi.encoders import jsonable_encoder
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, status
 
 from app.db import open_ready_connection
-from app.models import ProjectCreate, ProjectListResponse, ProjectResponse, ProjectStatus, ProjectUpdate
+from app.models import (
+    ProjectAssignmentCreate,
+    ProjectAssignmentDelete,
+    ProjectAssignmentListResponse,
+    ProjectAssignmentModelUpdate,
+    ProjectAssignmentResponse,
+    ProjectAssignmentUpdate,
+    ProjectCreate,
+    ProjectListResponse,
+    ProjectResponse,
+    ProjectStatus,
+    ProjectUpdate,
+)
+from app.revision_utils import insert_revision, json_object, utc_value
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
-
-
-def _json_object(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        return json.loads(value)
-    return dict(value)
 
 
 def _serialize_project_row(row: Any) -> dict[str, Any]:
@@ -34,9 +35,9 @@ def _serialize_project_row(row: Any) -> dict[str, Any]:
         "github_repo": row["github_repo"],
         "github_project_id": row["github_project_id"],
         "current_version": row["current_version"],
-        "metadata": _json_object(row["metadata"]),
-        "created_at": row["created_at"].astimezone(timezone.utc),
-        "updated_at": row["updated_at"].astimezone(timezone.utc),
+        "metadata": json_object(row["metadata"]),
+        "created_at": utc_value(row["created_at"]),
+        "updated_at": utc_value(row["updated_at"]),
     }
 
 
@@ -47,56 +48,36 @@ async def _fetch_project_or_404(conn: Any, project_id: UUID) -> Any:
     return row
 
 
-async def _insert_revision(
-    conn: Any,
-    *,
-    entity_id: UUID,
-    revision_number: int,
-    actor: str,
-    change_summary: str,
-    reason_category: str,
-    reason_detail: str,
-    reason_references: list[str],
-    before_snapshot: dict[str, Any] | None,
-    after_snapshot: dict[str, Any],
-) -> None:
-    await conn.execute(
+def _serialize_assignment_row(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "team_member_id": row["team_member_id"],
+        "is_enabled": row["is_enabled"],
+        "provider_override": row["provider_override"],
+        "model_override": row["model_override"],
+        "disabled_at": utc_value(row["disabled_at"]),
+        "disable_reason": row["disable_reason"],
+        "current_version": row["current_version"],
+        "created_at": utc_value(row["created_at"]),
+        "updated_at": utc_value(row["updated_at"]),
+    }
+
+
+async def _fetch_assignment_or_404(conn: Any, project_id: UUID, member_id: UUID) -> Any:
+    row = await conn.fetchrow(
         """
-        INSERT INTO revisions (
-          entity_type,
-          entity_id,
-          revision_number,
-          actor,
-          change_summary,
-          reason_category,
-          reason_detail,
-          reason_references,
-          before_snapshot,
-          after_snapshot
-        )
-        VALUES (
-          'project',
-          $1,
-          $2,
-          $3,
-          $4,
-          $5,
-          $6,
-          $7::jsonb,
-          $8::jsonb,
-          $9::jsonb
-        )
+        SELECT *
+          FROM project_team_members
+         WHERE project_id = $1
+           AND team_member_id = $2
         """,
-        entity_id,
-        revision_number,
-        actor,
-        change_summary,
-        reason_category,
-        reason_detail,
-        json.dumps(reason_references),
-        json.dumps(jsonable_encoder(before_snapshot)) if before_snapshot is not None else None,
-        json.dumps(jsonable_encoder(after_snapshot)),
+        project_id,
+        member_id,
     )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project assignment not found")
+    return row
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -125,8 +106,9 @@ async def create_project(payload: ProjectCreate) -> ProjectResponse:
                 json.dumps(payload.metadata or {}),
             )
             project = _serialize_project_row(row)
-            await _insert_revision(
+            await insert_revision(
                 conn,
+                entity_type="project",
                 entity_id=project["id"],
                 revision_number=1,
                 actor="human:local",
@@ -254,8 +236,9 @@ async def update_project(project_id: UUID, payload: ProjectUpdate) -> ProjectRes
                 next_version,
             )
             project = _serialize_project_row(row)
-            await _insert_revision(
+            await insert_revision(
                 conn,
+                entity_type="project",
                 entity_id=project["id"],
                 revision_number=next_version,
                 actor="human:local",
@@ -270,3 +253,188 @@ async def update_project(project_id: UUID, payload: ProjectUpdate) -> ProjectRes
         await conn.close()
 
     return ProjectResponse.model_validate(project)
+
+
+@router.get("/{project_id}/team", response_model=ProjectAssignmentListResponse)
+async def list_project_team(project_id: UUID) -> ProjectAssignmentListResponse:
+    conn = await open_ready_connection()
+    try:
+        await _fetch_project_or_404(conn, project_id)
+        rows = await conn.fetch(
+            """
+            SELECT *
+              FROM project_team_members
+             WHERE project_id = $1
+             ORDER BY created_at ASC
+            """,
+            project_id,
+        )
+    finally:
+        await conn.close()
+
+    items = [ProjectAssignmentResponse.model_validate(_serialize_assignment_row(row)) for row in rows]
+    return ProjectAssignmentListResponse(total=len(items), items=items)
+
+
+@router.post("/{project_id}/team", response_model=ProjectAssignmentResponse, status_code=status.HTTP_201_CREATED)
+async def add_team_member_to_project(project_id: UUID, payload: ProjectAssignmentCreate) -> ProjectAssignmentResponse:
+    conn = await open_ready_connection()
+    try:
+        async with conn.transaction():
+            await _fetch_project_or_404(conn, project_id)
+            member = await conn.fetchrow("SELECT id FROM team_members WHERE id = $1", payload.team_member_id)
+            if member is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team member not found")
+
+            existing = await conn.fetchrow(
+                """
+                SELECT id
+                  FROM project_team_members
+                 WHERE project_id = $1
+                   AND team_member_id = $2
+                """,
+                project_id,
+                payload.team_member_id,
+            )
+            if existing is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Team member already assigned")
+
+            row = await conn.fetchrow(
+                """
+                INSERT INTO project_team_members (
+                  project_id,
+                  team_member_id,
+                  provider_override,
+                  model_override
+                )
+                VALUES ($1, $2, $3, $4)
+                RETURNING *
+                """,
+                project_id,
+                payload.team_member_id,
+                payload.provider_override.value if payload.provider_override is not None else None,
+                payload.model_override,
+            )
+            assignment = _serialize_assignment_row(row)
+            await insert_revision(
+                conn,
+                entity_type="project_assignment",
+                entity_id=assignment["id"],
+                revision_number=1,
+                actor="human:local",
+                change_summary="Initial project assignment",
+                reason_category=payload.reason.category.value,
+                reason_detail=payload.reason.detail,
+                reason_references=payload.reason.references,
+                before_snapshot=None,
+                after_snapshot=assignment,
+            )
+    finally:
+        await conn.close()
+
+    return ProjectAssignmentResponse.model_validate(assignment)
+
+
+@router.patch("/{project_id}/team/{member_id}", response_model=ProjectAssignmentResponse)
+async def update_project_team_member(
+    project_id: UUID, member_id: UUID, payload: ProjectAssignmentUpdate
+) -> ProjectAssignmentResponse:
+    conn = await open_ready_connection()
+    try:
+        async with conn.transaction():
+            current_row = await _fetch_assignment_or_404(conn, project_id, member_id)
+            current = _serialize_assignment_row(current_row)
+
+            updated = {
+                "is_enabled": payload.is_enabled if payload.is_enabled is not None else current["is_enabled"],
+                "provider_override": (
+                    payload.provider_override.value
+                    if payload.provider_override is not None
+                    else current["provider_override"]
+                ),
+                "model_override": payload.model_override if payload.model_override is not None else current["model_override"],
+                "disable_reason": payload.disable_reason if payload.disable_reason is not None else current["disable_reason"],
+            }
+            if payload.is_enabled is False:
+                # database-side timestamp keeps the event time authoritative
+                disabled_at_expr = "NOW()"
+            elif payload.is_enabled is True:
+                disabled_at_expr = "NULL"
+            else:
+                disabled_at_expr = "disabled_at"
+
+            if (
+                updated["is_enabled"] == current["is_enabled"]
+                and updated["provider_override"] == current["provider_override"]
+                and updated["model_override"] == current["model_override"]
+                and updated["disable_reason"] == current["disable_reason"]
+            ):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No assignment fields changed")
+
+            next_version = current["current_version"] + 1
+            row = await conn.fetchrow(
+                f"""
+                UPDATE project_team_members
+                   SET is_enabled = $3,
+                       provider_override = $4,
+                       model_override = $5,
+                       disable_reason = $6,
+                       disabled_at = {disabled_at_expr},
+                       current_version = $7,
+                       updated_at = NOW()
+                 WHERE project_id = $1
+                   AND team_member_id = $2
+             RETURNING *
+                """,
+                project_id,
+                member_id,
+                updated["is_enabled"],
+                updated["provider_override"],
+                updated["model_override"],
+                updated["disable_reason"],
+                next_version,
+            )
+            assignment = _serialize_assignment_row(row)
+            await insert_revision(
+                conn,
+                entity_type="project_assignment",
+                entity_id=assignment["id"],
+                revision_number=next_version,
+                actor="human:local",
+                change_summary="Updated project assignment",
+                reason_category=payload.reason.category.value,
+                reason_detail=payload.reason.detail,
+                reason_references=payload.reason.references,
+                before_snapshot=current,
+                after_snapshot=assignment,
+            )
+    finally:
+        await conn.close()
+
+    return ProjectAssignmentResponse.model_validate(assignment)
+
+
+@router.patch("/{project_id}/team/{member_id}/model", response_model=ProjectAssignmentResponse)
+async def update_project_team_member_model(
+    project_id: UUID, member_id: UUID, payload: ProjectAssignmentModelUpdate
+) -> ProjectAssignmentResponse:
+    update_payload = ProjectAssignmentUpdate(
+        model_override=payload.model_override,
+        provider_override=payload.provider_override,
+        reason=payload.reason,
+    )
+    return await update_project_team_member(project_id, member_id, update_payload)
+
+
+@router.delete("/{project_id}/team/{member_id}", response_model=ProjectAssignmentResponse)
+async def disable_project_team_member(
+    project_id: UUID,
+    member_id: UUID,
+    payload: ProjectAssignmentDelete = Body(...),
+) -> ProjectAssignmentResponse:
+    update_payload = ProjectAssignmentUpdate(
+        is_enabled=False,
+        reason=payload.reason,
+        disable_reason="Disabled via delete endpoint",
+    )
+    return await update_project_team_member(project_id, member_id, update_payload)
