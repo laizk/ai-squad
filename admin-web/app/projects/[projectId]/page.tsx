@@ -8,9 +8,19 @@ import {
   type Milestone,
   type MilestoneListResponse,
   type Project,
+  type Revision,
+  type RevisionEntityType,
+  type RevisionListResponse,
   type Task,
   type TaskListResponse
 } from "../../lib/api";
+
+type TimelineEntry = {
+  entityType: RevisionEntityType;
+  entityId: string;
+  entityLabel: string;
+  revision: Revision;
+};
 
 const milestoneStatuses = [
   "planned",
@@ -48,11 +58,15 @@ async function fetchProject(projectId: string) {
         return [milestone.id, tasks.items] as const;
       })
     );
+    const tasksByMilestoneMap = Object.fromEntries(tasksByMilestone) as Record<string, Task[]>;
+
+    const timeline = await fetchTimeline(project, milestones.items, tasksByMilestoneMap);
 
     return {
       project,
       milestones: milestones.items,
-      tasksByMilestone: Object.fromEntries(tasksByMilestone) as Record<string, Task[]>
+      tasksByMilestone: tasksByMilestoneMap,
+      timeline
     };
   } catch (error) {
     if (error instanceof Error && error.message === "Project not found") {
@@ -60,6 +74,101 @@ async function fetchProject(projectId: string) {
     }
     throw error;
   }
+}
+
+async function fetchTimeline(
+  project: Project,
+  milestones: Milestone[],
+  tasksByMilestone: Record<string, Task[]>
+): Promise<TimelineEntry[]> {
+  const allTasks: Task[] = Object.values(tasksByMilestone).flat();
+
+  const requests: Promise<TimelineEntry[]>[] = [
+    apiRequest<RevisionListResponse>(`/api/v1/revisions/project/${project.id}`)
+      .then((response) => response.revisions.map((revision) => ({
+        entityType: "project" as const,
+        entityId: project.id,
+        entityLabel: project.name,
+        revision
+      })))
+      .catch(() => []),
+    ...milestones.map((milestone) =>
+      apiRequest<RevisionListResponse>(`/api/v1/revisions/milestone/${milestone.id}`)
+        .then((response) => response.revisions.map((revision) => ({
+          entityType: "milestone" as const,
+          entityId: milestone.id,
+          entityLabel: milestone.title,
+          revision
+        })))
+        .catch(() => [])
+    ),
+    ...allTasks.map((task) =>
+      apiRequest<RevisionListResponse>(`/api/v1/revisions/task/${task.id}`)
+        .then((response) => response.revisions.map((revision) => ({
+          entityType: "task" as const,
+          entityId: task.id,
+          entityLabel: task.title,
+          revision
+        })))
+        .catch(() => [])
+    )
+  ];
+
+  const batches = await Promise.all(requests);
+  return batches
+    .flat()
+    .sort((a, b) => b.revision.created_at.localeCompare(a.revision.created_at));
+}
+
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  return date.toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z");
+}
+
+function RevisionTimeline({ entries }: { entries: TimelineEntry[] }) {
+  if (entries.length === 0) {
+    return <p className="empty-state">No revisions recorded for this project yet.</p>;
+  }
+
+  return (
+    <ol className="timeline">
+      {entries.map((entry) => {
+        const key = `${entry.entityType}:${entry.entityId}:${entry.revision.revision_number}`;
+        return (
+          <li key={key} className="timeline-row">
+            <div className="timeline-marker" aria-hidden="true" />
+            <div className="timeline-body">
+              <div className="timeline-head">
+                <span className={`status-chip status-${entry.revision.reason.category}`}>
+                  {entry.revision.reason.category}
+                </span>
+                <span className="timeline-entity">
+                  {entry.entityType} · {entry.entityLabel}
+                </span>
+                <span className="timeline-version">v{entry.revision.revision_number}</span>
+              </div>
+              <p className="timeline-summary">{entry.revision.change_summary}</p>
+              <p className="timeline-reason">{entry.revision.reason.detail}</p>
+              {entry.revision.reason.references.length > 0 ? (
+                <ul className="timeline-refs">
+                  {entry.revision.reason.references.map((reference) => (
+                    <li key={reference}>{reference}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="timeline-meta">
+                <span>{entry.revision.actor}</span>
+                <span>{formatTimestamp(entry.revision.created_at)}</span>
+              </div>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 async function createMilestoneAction(formData: FormData) {
@@ -380,7 +489,7 @@ export default async function ProjectDetailPage({
 }: {
   params: { projectId: string };
 }) {
-  const { project, milestones, tasksByMilestone } = await fetchProject(params.projectId);
+  const { project, milestones, tasksByMilestone, timeline } = await fetchProject(params.projectId);
 
   return (
     <main className="shell page-stack">
@@ -471,6 +580,18 @@ export default async function ProjectDetailPage({
           </form>
         </article>
       </section>
+
+      <article className="card">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Revision history</p>
+            <h2>Audit trail</h2>
+          </div>
+          <p className="meta">{timeline.length} entries</p>
+        </div>
+
+        <RevisionTimeline entries={timeline} />
+      </article>
     </main>
   );
 }

@@ -126,3 +126,30 @@ export type TaskListResponse = {
   total: number;
   items: Task[];
 };
+
+export type RevisionEntityType =
+  | "project"
+  | "team_member"
+  | "project_assignment"
+  | "milestone"
+  | "task";
+
+export type Revision = {
+  revision_number: number;
+  actor: string;
+  change_summary: string;
+  reason: {
+    category: ReasonCategory;
+    detail: string;
+    references: string[];
+  };
+  before_snapshot: Record<string, unknown> | null;
+  after_snapshot: Record<string, unknown>;
+  created_at: string;
+};
+
+export type RevisionListResponse = {
+  entity_type: RevisionEntityType;
+  entity_id: string;
+  revisions: Revision[];
+};
