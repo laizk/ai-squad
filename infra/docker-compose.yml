@@ -78,6 +78,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
+        INTERNAL_API_URL: ${INTERNAL_API_URL:-http://control-api:8000}
         NEXT_PUBLIC_APP_PHASE: P0
     container_name: squad-admin-web
     restart: unless-stopped
@@ -86,6 +87,7 @@ services:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
+      INTERNAL_API_URL: ${INTERNAL_API_URL:-http://control-api:8000}
       NEXT_PUBLIC_APP_PHASE: P0
       NODE_ENV: production
     ports:

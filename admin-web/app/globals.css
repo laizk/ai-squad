@@ -34,6 +34,11 @@ body {
   padding: 56px 0 72px;
 }
 
+.page-stack {
+  display: grid;
+  gap: 18px;
+}
+
 .hero {
   padding: 28px;
   border: 1px solid var(--line);
@@ -69,7 +74,10 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
-  margin-top: 18px;
+}
+
+.grid-wide {
+  align-items: flex-start;
 }
 
 .card {
@@ -95,6 +103,235 @@ body {
   padding-left: 20px;
 }
 
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.section-head.tight {
+  margin-bottom: 12px;
+}
+
+.meta {
+  margin: 0;
+  color: var(--muted);
+}
+
+.stack-list {
+  display: grid;
+  gap: 16px;
+}
+
+.list-card,
+.milestone-card,
+.task-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 249, 239, 0.92);
+  color: inherit;
+  text-decoration: none;
+}
+
+.list-card:hover {
+  border-color: rgba(161, 66, 22, 0.35);
+  transform: translateY(-1px);
+}
+
+.list-card-top,
+.hero-topline,
+.task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.list-card h3,
+.milestone-card h3,
+.task-card h4 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.list-card p,
+.milestone-copy,
+.task-head p,
+.empty-state {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.list-card-meta,
+.inline-meta,
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.hero-meta {
+  margin-top: 20px;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status-active,
+.status-approved,
+.status-done {
+  color: #1e5f2b;
+  border-color: rgba(30, 95, 43, 0.25);
+  background: rgba(30, 95, 43, 0.08);
+}
+
+.status-paused,
+.status-review,
+.status-qa_check,
+.status-judge_review,
+.status-pending_approval,
+.status-pending_human {
+  color: #8b5200;
+  border-color: rgba(139, 82, 0, 0.25);
+  background: rgba(139, 82, 0, 0.09);
+}
+
+.status-archived,
+.status-rejected {
+  color: #7c2431;
+  border-color: rgba(124, 36, 49, 0.25);
+  background: rgba(124, 36, 49, 0.1);
+}
+
+.status-planned,
+.status-backlog,
+.status-queued,
+.status-in_progress,
+.status-rework {
+  color: var(--accent);
+  border-color: rgba(161, 66, 22, 0.2);
+  background: rgba(161, 66, 22, 0.09);
+}
+
+.form-stack,
+.task-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.form-slab {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.form-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field span {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.field input,
+.field textarea,
+.field select {
+  width: 100%;
+  border: 1px solid rgba(56, 43, 30, 0.18);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.field textarea {
+  resize: vertical;
+}
+
+.field-inline {
+  align-items: center;
+  grid-template-columns: auto minmax(180px, 1fr);
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.button-primary,
+.button-secondary,
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  text-decoration: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button-primary,
+.button-secondary {
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.button-primary {
+  background: var(--accent);
+  color: #fff8f1;
+}
+
+.button-secondary {
+  border-color: rgba(161, 66, 22, 0.24);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--accent);
+}
+
+.text-link {
+  color: var(--accent);
+}
+
+.criteria-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+
+.milestone-card {
+  gap: 16px;
+}
+
 code {
   display: inline-block;
   margin-top: 8px;
@@ -111,6 +348,21 @@ code {
   }
 
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-topline,
+  .list-card-top,
+  .task-head,
+  .section-head,
+  .inline-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .form-grid,
+  .form-grid-3,
+  .field-inline {
     grid-template-columns: 1fr;
   }
 }

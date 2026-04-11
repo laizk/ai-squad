@@ -1,39 +1,127 @@
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const phase = process.env.NEXT_PUBLIC_APP_PHASE ?? "P-1";
+import Link from "next/link";
+import { revalidatePath } from "next/cache";
 
-const checklist = [
-  "Postgres bootstrap marker exists and is queryable",
-  "Redis responds to a real ping from control-api",
-  "Control API reports dependency truth instead of a hardcoded ok",
-  "Admin web stays minimal while the foundation layer becomes real"
-];
+import { apiRequest, buildReason, type ProjectListResponse } from "./lib/api";
 
-export default function HomePage() {
+const phase = process.env.NEXT_PUBLIC_APP_PHASE ?? "P0";
+
+async function createProjectAction(formData: FormData) {
+  "use server";
+
+  const name = String(formData.get("name") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+  const githubOrg = String(formData.get("github_org") ?? "").trim();
+  const githubRepo = String(formData.get("github_repo") ?? "").trim();
+
+  if (!name) {
+    throw new Error("Project name is required");
+  }
+
+  await apiRequest("/api/v1/projects", {
+    method: "POST",
+    body: {
+      name,
+      description: description || null,
+      github_org: githubOrg || null,
+      github_repo: githubRepo || null,
+      reason: buildReason(
+        "initial_creation",
+        "Creating a project from the admin web so the planning graph can be reviewed and edited in the UI."
+      )
+    }
+  });
+
+  revalidatePath("/");
+}
+
+export default async function HomePage() {
+  const projects = await apiRequest<ProjectListResponse>("/api/v1/projects");
+
   return (
-    <main className="shell">
+    <main className="shell page-stack">
       <section className="hero">
         <p className="eyebrow">AI Squad</p>
-        <h1>Phase {phase} foundation</h1>
+        <h1>Phase {phase} planning desk</h1>
         <p className="lede">
-          The stack now checks real Postgres and Redis dependencies and carries
-          a minimal schema marker, while the UI remains intentionally thin.
+          The admin web now reads the live control API and exposes the first reviewable planning surface:
+          projects, milestones, and tasks with append-only revisions behind them.
         </p>
       </section>
 
-      <section className="grid">
+      <section className="grid grid-wide">
         <article className="card">
-          <h2>Control API</h2>
-          <p>Expected health endpoint:</p>
-          <code>{apiUrl}/api/v1/health</code>
+          <div className="section-head">
+            <div>
+              <p className="eyebrow">Projects</p>
+              <h2>Active workspace</h2>
+            </div>
+            <p className="meta">{projects.total} total</p>
+          </div>
+
+          {projects.items.length === 0 ? (
+            <p className="empty-state">No projects yet. Create the first project from this page.</p>
+          ) : (
+            <div className="stack-list">
+              {projects.items.map((project) => (
+                <Link key={project.id} href={`/projects/${project.id}`} className="list-card">
+                  <div className="list-card-top">
+                    <h3>{project.name}</h3>
+                    <span className={`status-chip status-${project.status}`}>{project.status}</span>
+                  </div>
+                  <p>{project.description ?? "No description yet."}</p>
+                  <div className="list-card-meta">
+                    <span>v{project.current_version}</span>
+                    <span>
+                      {project.github_org && project.github_repo
+                        ? `${project.github_org}/${project.github_repo}`
+                        : "No GitHub repo linked"}
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
         </article>
 
         <article className="card">
-          <h2>Current intent</h2>
-          <ul>
-            {checklist.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
+          <div className="section-head">
+            <div>
+              <p className="eyebrow">Create</p>
+              <h2>New project</h2>
+            </div>
+          </div>
+
+          <form action={createProjectAction} className="form-stack">
+            <label className="field">
+              <span>Name</span>
+              <input name="name" type="text" placeholder="Planning workspace" required />
+            </label>
+
+            <label className="field">
+              <span>Description</span>
+              <textarea
+                name="description"
+                rows={4}
+                placeholder="What is the product, and what should this team deliver?"
+              />
+            </label>
+
+            <div className="form-grid">
+              <label className="field">
+                <span>GitHub org</span>
+                <input name="github_org" type="text" placeholder="my-org" />
+              </label>
+
+              <label className="field">
+                <span>GitHub repo</span>
+                <input name="github_repo" type="text" placeholder="my-repo" />
+              </label>
+            </div>
+
+            <button type="submit" className="button-primary">
+              Create project
+            </button>
+          </form>
         </article>
       </section>
     </main>

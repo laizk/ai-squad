@@ -1,9 +1,11 @@
 FROM node:20-alpine
 
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG INTERNAL_API_URL=http://control-api:8000
 ARG NEXT_PUBLIC_APP_PHASE=P0
 
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV INTERNAL_API_URL=${INTERNAL_API_URL}
 ENV NEXT_PUBLIC_APP_PHASE=${NEXT_PUBLIC_APP_PHASE}
 
 WORKDIR /app
@@ -19,4 +21,4 @@ RUN npm run build
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start"]
+CMD ["node", ".next/standalone/server.js"]
