@@ -1,25 +1,15 @@
-version: "3.9"
-
-# AI Squad — Local Infrastructure
-# Target: MacBook Pro M5 Pro, 64 GB RAM
-#
-# Start: docker compose up -d
-# Stop:  docker compose down
-# Logs:  docker compose logs -f [service]
-# Reset DB: docker compose down -v && docker compose up -d
+# AI Squad — Phase P-1 scaffold
+# This compose file intentionally brings up only the minimum stack:
+# postgres, redis, control-api, and admin-web.
 
 services:
-
-  # ──────────────────────────────────────────────────
-  # POSTGRES 16
-  # ──────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: squad-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-squad}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-squadlocal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-local}
       POSTGRES_DB: ${POSTGRES_DB:-squad}
     ports:
       - "5432:5432"
@@ -27,23 +17,16 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-squad}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-squad} -d ${POSTGRES_DB:-squad}"]
       interval: 5s
       timeout: 5s
       retries: 10
-    deploy:
-      resources:
-        limits:
-          memory: 1g
 
-  # ──────────────────────────────────────────────────
-  # REDIS 7
-  # ──────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: squad-redis
     restart: unless-stopped
-    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1
+    command: redis-server --save 60 1
     ports:
       - "6379:6379"
     volumes:
@@ -53,48 +36,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    deploy:
-      resources:
-        limits:
-          memory: 512m
 
-  # ──────────────────────────────────────────────────
-  # OLLAMA (shared model server)
-  # Apple Silicon: uses Metal GPU acceleration
-  #
-  # After first start, pull models:
-  #   docker exec squad-ollama ollama pull qwen2.5-coder:14b
-  #   docker exec squad-ollama ollama pull mistral-nemo:12b
-  # ──────────────────────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: squad-ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    environment:
-      - OLLAMA_KEEP_ALIVE=5m       # unload idle models after 5 min
-      - OLLAMA_MAX_LOADED_MODELS=1 # only one model in memory at a time
-      - OLLAMA_NUM_PARALLEL=1
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 36g   # leave ~28 GB for OS + other services
-    # On Apple Silicon, add device access:
-    # For Docker Desktop Mac, Metal is available by default when using
-    # the ollama image. No extra flags needed.
-
-  # ──────────────────────────────────────────────────
-  # CONTROL API (FastAPI)
-  # ──────────────────────────────────────────────────
   control-api:
     build:
       context: ../control-api
@@ -106,44 +48,26 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
     environment:
+      APP_NAME: AI Squad Control API
+      APP_VERSION: 0.2.0-scaffold
+      APP_ENV: development
+      APP_PHASE: P-1
       DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
       REDIS_URL: redis://redis:6379/0
-      OLLAMA_BASE_URL: http://ollama:11434
-      ARTIFACTS_ROOT: /artifacts
-      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
-      GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
-      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
-      SECRET_KEY: ${SECRET_KEY:-changeme-in-production}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      ENVIRONMENT: ${ENVIRONMENT:-development}
     ports:
       - "8000:8000"
-    volumes:
-      - ../artifacts:/artifacts
-      - ./secrets:/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/api/v1/health >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 15s
-    deploy:
-      resources:
-        limits:
-          memory: 1g
+      start_period: 10s
 
-  # ──────────────────────────────────────────────────
-  # ADMIN WEB (Next.js 14)
-  # ──────────────────────────────────────────────────
   admin-web:
     build:
       context: ../admin-web
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
     container_name: squad-admin-web
     restart: unless-stopped
     depends_on:
@@ -151,117 +75,13 @@ services:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
-      NODE_ENV: ${NODE_ENV:-development}
+      NEXT_PUBLIC_APP_PHASE: P-1
+      NODE_ENV: production
     ports:
       - "3000:3000"
-    deploy:
-      resources:
-        limits:
-          memory: 1g
-
-  # ──────────────────────────────────────────────────
-  # SANDBOX RUNNER
-  # Isolated execution environment for lint/build/test
-  # V1 target design is a network-isolated runner driven by a dispatcher.
-  # This compose service remains a placeholder until that split is implemented.
-  # ──────────────────────────────────────────────────
-  sandbox-runner:
-    build:
-      context: ../sandbox-runner
-      dockerfile: Dockerfile
-    container_name: squad-sandbox-runner
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      control-api:
-        condition: service_healthy
-    environment:
-      REDIS_URL: redis://redis:6379/1      # separate DB from main queue
-      CONTROL_API_URL: http://control-api:8000
-      WORKSPACE_ROOT: /workspace
-      ALLOWED_COMMANDS_PATH: /app/policies/allowed_commands.yaml
-      MAX_EXECUTION_SECONDS: 300
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    volumes:
-      - sandbox_workspace:/workspace
-    # Do not claim process-level network isolation here.
-    # The real V1 plan is dispatcher + network_mode:none runner via shared volume.
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-          cpus: "4"
-
-  # ──────────────────────────────────────────────────
-  # CELERY WORKER (runs agent tasks from queue)
-  # ──────────────────────────────────────────────────
-  celery-worker:
-    build:
-      context: ../control-api
-      dockerfile: Dockerfile
-    container_name: squad-celery-worker
-    restart: unless-stopped
-    command: celery -A app.worker worker --loglevel=info --concurrency=2 -Q agents
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
-      REDIS_URL: redis://redis:6379/0
-      OLLAMA_BASE_URL: http://ollama:11434
-      ARTIFACTS_ROOT: /artifacts
-      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
-      GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
-      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
-      SECRET_KEY: ${SECRET_KEY:-changeme-in-production}
-    volumes:
-      - ../artifacts:/artifacts
-      - ./secrets:/secrets:ro
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-
-  # ──────────────────────────────────────────────────
-  # CELERY BEAT (scheduled tasks: GitHub sync, cleanup)
-  # ──────────────────────────────────────────────────
-  celery-beat:
-    build:
-      context: ../control-api
-      dockerfile: Dockerfile
-    container_name: squad-celery-beat
-    restart: unless-stopped
-    command: celery -A app.worker beat --loglevel=info --scheduler redbeat.RedBeatScheduler
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
-      REDIS_URL: redis://redis:6379/0
-      OLLAMA_BASE_URL: http://ollama:11434
-      SECRET_KEY: ${SECRET_KEY:-changeme-in-production}
-    volumes:
-      - ./secrets:/secrets:ro
-    deploy:
-      resources:
-        limits:
-          memory: 256m
 
 volumes:
   postgres_data:
     name: squad-postgres-data
   redis_data:
     name: squad-redis-data
-  ollama_models:
-    name: squad-ollama-models
-  sandbox_workspace:
-    name: squad-sandbox-workspace
-
-networks:
-  default:
-    name: squad-network
