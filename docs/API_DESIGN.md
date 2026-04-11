@@ -1,5 +1,5 @@
 # AI Squad — Control API Design
-# Version: 0.1.0-baseline | Date: 2026-04-11
+# Version: 0.2.0-architecture-refresh | Date: 2026-04-11
 # Base URL: http://localhost:8000/api/v1
 
 ---
@@ -10,7 +10,7 @@
 - All timestamps are ISO 8601 UTC (`2026-04-11T12:00:00Z`)
 - All IDs are UUIDs
 - Pagination: `?page=1&per_page=50` (max 200); response includes `total`, `page`, `per_page`, `items`
-- Mutations require `reason` field (string, min 10 chars) — returns 422 if missing
+- Mutations require a structured `reason` object — returns 422 if missing or malformed
 - Errors: `{"error": "string", "detail": "string", "field_errors": [...]}`
 - All writes return the updated resource (not 204)
 
@@ -51,7 +51,10 @@ Create a project.
   "description": "A simple todo application with authentication",
   "github_org": "my-org",
   "github_repo": "todo-app",
-  "reason": "Initial project creation"
+  "reason": {
+    "category": "initial_creation",
+    "detail": "Creating the initial project record for this product."
+  }
 }
 ```
 
@@ -88,7 +91,10 @@ Update project fields. `reason` required.
 ```json
 {
   "description": "Updated description",
-  "reason": "Scope was clarified in planning session"
+  "reason": {
+    "category": "scope_change",
+    "detail": "Updating project scope after the planning session clarified delivery boundaries."
+  }
 }
 ```
 
@@ -121,7 +127,10 @@ Create a new team member.
     "allowed_branches": ["feature/*"],
     "can_write_workflows": false
   },
-  "reason": "Onboarding frontend specialist for UI-heavy milestone"
+  "reason": {
+    "category": "initial_creation",
+    "detail": "Onboarding a frontend specialist for UI-heavy work on this project."
+  }
 }
 ```
 
@@ -154,7 +163,10 @@ List all revisions for a team member, ordered by `revision_number`.
       "revision_number": 1,
       "actor": "human:klaiz",
       "change_summary": "Initial onboarding",
-      "reason": "Onboarding frontend specialist...",
+      "reason": {
+        "category": "initial_creation",
+        "detail": "Onboarding frontend specialist for UI-heavy work."
+      },
       "before_snapshot": null,
       "after_snapshot": {...},
       "created_at": "..."
@@ -163,7 +175,10 @@ List all revisions for a team member, ordered by `revision_number`.
       "revision_number": 2,
       "actor": "human:klaiz",
       "change_summary": "Updated system prompt to improve code quality focus",
-      "reason": "PM output quality was poor; tightened instructions",
+      "reason": {
+        "category": "prompt_tuning",
+        "detail": "Tightened instructions after the prior output quality was below the expected standard."
+      },
       "before_snapshot": {"system_prompt": "old prompt..."},
       "after_snapshot": {"system_prompt": "new prompt..."},
       "created_at": "..."
@@ -186,7 +201,10 @@ Add a team member to a project.
   "team_member_id": "uuid",
   "model_override": "llama3.2:3b",
   "provider_override": null,
-  "reason": "Adding PM for initial planning phase"
+  "reason": {
+    "category": "initial_creation",
+    "detail": "Adding the PM team member for the initial planning phase of this project."
+  }
 }
 ```
 
@@ -199,7 +217,10 @@ Remove member from project (soft: sets `disabled_at`, preserves history).
 **Request:**
 ```json
 {
-  "reason": "Role no longer needed for this project phase"
+  "reason": {
+    "category": "scope_change",
+    "detail": "Removing this assignment because the role is no longer needed in the current project phase."
+  }
 }
 ```
 
@@ -212,7 +233,10 @@ Enable/disable or change model override.
 {
   "is_enabled": false,
   "disable_reason": "Taking a different approach to UX",
-  "reason": "Disabling UX agent for this sprint"
+  "reason": {
+    "category": "scope_change",
+    "detail": "Disabling the UX assignment for the current sprint while using the existing design direction."
+  }
 }
 ```
 
@@ -225,7 +249,10 @@ Change model or provider override for this project.
 {
   "model_override": "mistral-nemo:12b",
   "provider_override": "ollama",
-  "reason": "Switching to smaller model after PM output quality was acceptable"
+  "reason": {
+    "category": "fix",
+    "detail": "Switching to a smaller model after validating that output quality remains acceptable for this project."
+  }
 }
 ```
 
@@ -247,7 +274,10 @@ Change model or provider override for this project.
   ],
   "display_order": 1,
   "due_date": "2026-05-01",
-  "reason": "First milestone from PM planning session"
+  "reason": {
+    "category": "initial_creation",
+    "detail": "Creating the first project milestone from the approved PM planning output."
+  }
 }
 ```
 
@@ -286,7 +316,10 @@ Revision history for a milestone.
     "Password is bcrypt-hashed before storage"
   ],
   "display_order": 1,
-  "reason": "Task created from PM planning output"
+  "reason": {
+    "category": "initial_creation",
+    "detail": "Creating this task from the approved PM planning output."
+  }
 }
 ```
 
@@ -320,7 +353,10 @@ Trigger a workflow run. This is the main entry point for agent work.
   "input": {
     "brief": "User story or task description override (optional)"
   },
-  "reason": "Starting implementation of auth register endpoint"
+  "reason": {
+    "category": "initial_creation",
+    "detail": "Starting the workflow run for the auth register implementation task."
+  }
 }
 ```
 
@@ -372,7 +408,12 @@ Cancel a run. Steps already completed are preserved.
 
 **Request:**
 ```json
-{"reason": "Human decided to reroute to a different approach"}
+{
+  "reason": {
+    "category": "scope_change",
+    "detail": "Cancelling this run because the human reviewer decided to reroute to a different implementation approach."
+  }
+}
 ```
 
 ### GET /runs/{id}/steps/{step_id}/logs
@@ -421,21 +462,34 @@ List all artifacts for a task, grouped by artifact_type.
 
 ### POST /approvals
 
-Create or update an approval decision.
+Create an approval decision bound to a specific revision.
 
 **Request:**
 ```json
 {
   "entity_type": "milestone",
   "entity_id": "uuid",
-  "decision": "approved",
+  "approved_revision_number": 3,
+  "status": "approved",
   "comment": "PM output is solid. Tasks are well-scoped. GitHub Issues created correctly.",
-  "evidence_artifact_ids": ["uuid1", "uuid2"],
-  "reason": "Human review complete"
+  "override_used": false,
+  "override_reason": null,
+  "evidence": [
+    {
+      "evidence_type": "artifact",
+      "artifact_id": "uuid1",
+      "description": "Approved PM spec artifact"
+    },
+    {
+      "evidence_type": "github_link",
+      "external_url": "https://github.com/example/repo/issues/12",
+      "description": "Representative GitHub issue created from the plan"
+    }
+  ]
 }
 ```
 
-**`decision` options:** `approved`, `rejected`, `changes_requested`
+**`status` options:** `approved`, `rejected`, `changes_requested`
 
 **Response 200:** approval object with `decided_at` set.
 
@@ -497,7 +551,10 @@ Force re-sync of a specific entity to GitHub.
 {
   "entity_type": "task",
   "entity_id": "uuid",
-  "reason": "Issue was accidentally deleted from GitHub"
+  "reason": {
+    "category": "fix",
+    "detail": "Forcing re-sync because the GitHub issue was deleted and must be recreated from internal state."
+  }
 }
 ```
 
