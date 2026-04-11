@@ -2,10 +2,10 @@ const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const phase = process.env.NEXT_PUBLIC_APP_PHASE ?? "P-1";
 
 const checklist = [
-  "Postgres and Redis containers start cleanly",
-  "Control API responds on /api/v1/health",
-  "Admin web loads without client-side errors",
-  "The repo now has a real scaffold to build on"
+  "Postgres bootstrap marker exists and is queryable",
+  "Redis responds to a real ping from control-api",
+  "Control API reports dependency truth instead of a hardcoded ok",
+  "Admin web stays minimal while the foundation layer becomes real"
 ];
 
 export default function HomePage() {
@@ -13,10 +13,10 @@ export default function HomePage() {
     <main className="shell">
       <section className="hero">
         <p className="eyebrow">AI Squad</p>
-        <h1>Phase {phase} scaffold</h1>
+        <h1>Phase {phase} foundation</h1>
         <p className="lede">
-          This is the first deployable slice: a minimal control plane and a
-          browser entry point, with no agent runtime or model dependency yet.
+          The stack now checks real Postgres and Redis dependencies and carries
+          a minimal schema marker, while the UI remains intentionally thin.
         </p>
       </section>
 
