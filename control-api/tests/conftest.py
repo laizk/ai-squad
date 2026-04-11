@@ -49,3 +49,46 @@ def team_member_payload() -> dict[str, object]:
             "references": [f"test:{suffix}"],
         },
     }
+
+
+@pytest.fixture
+def milestone_payload() -> dict[str, object]:
+    suffix = uuid4().hex[:8]
+    return {
+        "title": f"Milestone {suffix}",
+        "description": "Milestone created by integration tests against the live control API.",
+        "status": "planned",
+        "display_order": 1,
+        "acceptance_criteria": [
+            "The planning graph persists milestones in the control API.",
+            "Milestone changes create append-only revision history entries.",
+        ],
+        "due_date": "2026-05-15",
+        "reason": {
+            "category": "initial_creation",
+            "detail": "Creating an integration-test milestone to verify planning CRUD and revision behavior.",
+            "references": [f"test:{suffix}"],
+        },
+    }
+
+
+@pytest.fixture
+def task_payload() -> dict[str, object]:
+    suffix = uuid4().hex[:8]
+    return {
+        "title": f"Task {suffix}",
+        "description": "Task created by integration tests against the live control API.",
+        "status": "backlog",
+        "priority": "high",
+        "assigned_role": "dev-jr",
+        "acceptance_criteria": [
+            "The task is stored under the milestone.",
+            "Task updates create revision history with before and after snapshots.",
+        ],
+        "display_order": 1,
+        "reason": {
+            "category": "initial_creation",
+            "detail": "Creating an integration-test task to verify nested planning CRUD and revisions.",
+            "references": [f"test:{suffix}"],
+        },
+    }

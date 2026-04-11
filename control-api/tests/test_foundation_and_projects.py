@@ -209,3 +209,125 @@ def test_project_assignment_create_disable_and_revisions(
     assert revisions[1]["revision_number"] == 2
     assert revisions[1]["before_snapshot"]["is_enabled"] is True
     assert revisions[1]["after_snapshot"]["is_enabled"] is False
+
+
+def test_milestone_create_update_list_and_revisions(
+    client: httpx.Client,
+    project_payload: dict[str, object],
+    milestone_payload: dict[str, object],
+) -> None:
+    project_response = client.post("/projects", json=project_payload)
+    project_response.raise_for_status()
+    project = project_response.json()
+
+    create_response = client.post(f"/projects/{project['id']}/milestones", json=milestone_payload)
+    create_response.raise_for_status()
+    milestone = create_response.json()
+
+    assert milestone["project_id"] == project["id"]
+    assert milestone["title"] == milestone_payload["title"]
+    assert milestone["current_version"] == 1
+    assert milestone["status"] == "planned"
+
+    list_response = client.get(f"/projects/{project['id']}/milestones")
+    list_response.raise_for_status()
+    items = list_response.json()["items"]
+    assert any(item["id"] == milestone["id"] for item in items)
+
+    get_response = client.get(f"/milestones/{milestone['id']}")
+    get_response.raise_for_status()
+    fetched = get_response.json()
+    assert fetched["id"] == milestone["id"]
+    assert fetched["acceptance_criteria"] == milestone_payload["acceptance_criteria"]
+
+    update_payload = {
+        "status": "review",
+        "display_order": 2,
+        "reason": {
+            "category": "scope_change",
+            "detail": "Updating the integration-test milestone to verify version increments and milestone revisions.",
+            "references": [f"milestone:{milestone['id']}"],
+        },
+    }
+    update_response = client.patch(f"/milestones/{milestone['id']}", json=update_payload)
+    update_response.raise_for_status()
+    updated = update_response.json()
+
+    assert updated["current_version"] == 2
+    assert updated["status"] == "review"
+    assert updated["display_order"] == 2
+
+    revisions_response = client.get(f"/revisions/milestone/{milestone['id']}")
+    revisions_response.raise_for_status()
+    revisions = revisions_response.json()["revisions"]
+
+    assert len(revisions) == 2
+    assert revisions[0]["revision_number"] == 1
+    assert revisions[1]["revision_number"] == 2
+    assert revisions[1]["before_snapshot"]["status"] == "planned"
+    assert revisions[1]["after_snapshot"]["status"] == "review"
+
+
+def test_task_create_update_list_and_revisions(
+    client: httpx.Client,
+    project_payload: dict[str, object],
+    milestone_payload: dict[str, object],
+    task_payload: dict[str, object],
+) -> None:
+    project_response = client.post("/projects", json=project_payload)
+    project_response.raise_for_status()
+    project = project_response.json()
+
+    milestone_response = client.post(f"/projects/{project['id']}/milestones", json=milestone_payload)
+    milestone_response.raise_for_status()
+    milestone = milestone_response.json()
+
+    create_response = client.post(f"/milestones/{milestone['id']}/tasks", json=task_payload)
+    create_response.raise_for_status()
+    task = create_response.json()
+
+    assert task["project_id"] == project["id"]
+    assert task["milestone_id"] == milestone["id"]
+    assert task["priority"] == "high"
+    assert task["assigned_role"] == "dev-jr"
+    assert task["current_version"] == 1
+
+    list_response = client.get(f"/milestones/{milestone['id']}/tasks")
+    list_response.raise_for_status()
+    items = list_response.json()["items"]
+    assert any(item["id"] == task["id"] for item in items)
+
+    get_response = client.get(f"/tasks/{task['id']}")
+    get_response.raise_for_status()
+    fetched = get_response.json()
+    assert fetched["id"] == task["id"]
+    assert fetched["status"] == "backlog"
+
+    update_payload = {
+        "status": "in_progress",
+        "priority": "critical",
+        "assigned_role": "dev-sr",
+        "reason": {
+            "category": "fix",
+            "detail": "Updating the integration-test task to verify nested task revisions and state changes.",
+            "references": [f"task:{task['id']}"],
+        },
+    }
+    update_response = client.patch(f"/tasks/{task['id']}", json=update_payload)
+    update_response.raise_for_status()
+    updated = update_response.json()
+
+    assert updated["current_version"] == 2
+    assert updated["status"] == "in_progress"
+    assert updated["priority"] == "critical"
+    assert updated["assigned_role"] == "dev-sr"
+
+    revisions_response = client.get(f"/revisions/task/{task['id']}")
+    revisions_response.raise_for_status()
+    revisions = revisions_response.json()["revisions"]
+
+    assert len(revisions) == 2
+    assert revisions[0]["revision_number"] == 1
+    assert revisions[1]["revision_number"] == 2
+    assert revisions[1]["before_snapshot"]["status"] == "backlog"
+    assert revisions[1]["after_snapshot"]["status"] == "in_progress"

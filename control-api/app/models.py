@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
@@ -30,6 +30,35 @@ class ProviderType(str, Enum):
     anthropic = "anthropic"
     openai = "openai"
     custom = "custom"
+
+
+class MilestoneStatus(str, Enum):
+    planned = "planned"
+    in_progress = "in_progress"
+    review = "review"
+    pending_approval = "pending_approval"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class TaskStatus(str, Enum):
+    backlog = "backlog"
+    queued = "queued"
+    in_progress = "in_progress"
+    review = "review"
+    qa_check = "qa_check"
+    judge_review = "judge_review"
+    pending_human = "pending_human"
+    done = "done"
+    rejected = "rejected"
+    rework = "rework"
+
+
+class TaskPriority(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
 
 
 class EntityType(str, Enum):
@@ -207,3 +236,80 @@ class ProjectAssignmentResponse(BaseModel):
 class ProjectAssignmentListResponse(BaseModel):
     total: int
     items: list[ProjectAssignmentResponse]
+
+
+class MilestoneBase(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = None
+    status: MilestoneStatus | None = None
+    display_order: int | None = Field(default=None, ge=0)
+    acceptance_criteria: list[str] | None = None
+    due_date: date | None = None
+
+
+class MilestoneCreate(MilestoneBase):
+    title: str = Field(min_length=1, max_length=500)
+    reason: ReasonInput
+
+
+class MilestoneUpdate(MilestoneBase):
+    reason: ReasonInput
+
+
+class MilestoneResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    title: str
+    description: str | None
+    status: MilestoneStatus
+    display_order: int
+    acceptance_criteria: list[str]
+    due_date: date | None
+    current_version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class MilestoneListResponse(BaseModel):
+    total: int
+    items: list[MilestoneResponse]
+
+
+class TaskBase(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = None
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    assigned_role: TeamMemberRole | None = None
+    acceptance_criteria: list[str] | None = None
+    display_order: int | None = Field(default=None, ge=0)
+
+
+class TaskCreate(TaskBase):
+    title: str = Field(min_length=1, max_length=500)
+    reason: ReasonInput
+
+
+class TaskUpdate(TaskBase):
+    reason: ReasonInput
+
+
+class TaskResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    milestone_id: UUID
+    title: str
+    description: str | None
+    status: TaskStatus
+    priority: TaskPriority
+    assigned_role: TeamMemberRole | None
+    acceptance_criteria: list[str]
+    display_order: int
+    current_version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskListResponse(BaseModel):
+    total: int
+    items: list[TaskResponse]
