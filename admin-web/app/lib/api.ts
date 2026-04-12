@@ -337,7 +337,9 @@ export type ArtifactType =
   | "review_findings" | "refactor_summary"
   | "test_plan" | "test_results" | "bug_list"
   | "docker_changes" | "ci_changes" | "runbook"
-  | "rubric_score" | "recommendation" | "other";
+  | "rubric_score" | "recommendation"
+  | "decision_log" | "dev_output" | "sandbox_result"
+  | "other";
 
 export type Artifact = {
   id: string;

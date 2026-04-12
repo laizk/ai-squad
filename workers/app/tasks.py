@@ -1,7 +1,7 @@
 """Step execution task.
 
 Each task picks up a (run_id, step_id) pair, runs the appropriate
-stub agent, persists the output artifact, marks the step completed,
+agent module, persists the output artifact, marks the step completed,
 and either enqueues the next step or pauses the run.
 """
 from __future__ import annotations
@@ -15,9 +15,8 @@ from uuid import UUID
 
 import asyncpg
 
-from app.agents import dev_agent, pm_agent, reviewer_agent
+from app.agents import dev_agent, judge_agent, pm_agent, qa_agent, reviewer_agent
 from app.celery_app import app
-from app.stubs import reviewer_stub
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +33,8 @@ STUB_REGISTRY = {
     "pm":     pm_agent,      # real model-backed PM agent (P4)
     "dev-jr": dev_agent,       # real model-backed dev agent (P5)
     "dev-sr": reviewer_agent,  # real model-backed reviewer (P5)
-    "qa":     reviewer_stub,
-    "judge":  reviewer_stub,
+    "qa":     qa_agent,        # sandbox-backed QA agent (P6)
+    "judge":  judge_agent,     # real model-backed judge agent (P6)
 }
 
 
@@ -161,7 +160,12 @@ async def _run_step(run_id: str, step_id: str) -> None:
 
         # Rework loop — only fires after a reviewer (dev-sr) step
         if role == "dev-sr":
-            reworked = await _maybe_rework(conn, run_id, str(run["project_id"]), artifacts)
+            reworked = await _maybe_rework(
+                conn,
+                run_id,
+                step["step_order"],
+                artifacts,
+            )
             if reworked:
                 return  # new dev-jr + dev-sr inserted and dispatched
 
@@ -234,7 +238,7 @@ async def _run_step(run_id: str, step_id: str) -> None:
 async def _maybe_rework(
     conn: asyncpg.Connection,
     run_id: str,
-    project_id: str,
+    current_step_order: int,
     new_artifacts: list[dict],
 ) -> bool:
     """Insert a new dev-jr + dev-sr step pair when reviewer requests changes.
@@ -272,7 +276,23 @@ async def _maybe_rework(
         )
         return False
 
-    # Append two new steps after the current highest step_order
+    await conn.execute(
+        """
+        UPDATE run_steps
+           SET status = 'skipped',
+               error_message = $1,
+               completed_at = $2
+         WHERE run_id = $3
+           AND status = 'pending'
+           AND step_order > $4
+        """,
+        "Superseded by a reviewer-requested rework cycle.",
+        datetime.now(timezone.utc),
+        UUID(run_id),
+        current_step_order,
+    )
+
+    # Append a fresh downstream path after the current highest step_order
     max_order = await conn.fetchval(
         "SELECT MAX(step_order) FROM run_steps WHERE run_id = $1",
         UUID(run_id),
@@ -281,25 +301,38 @@ async def _maybe_rework(
 
     rework_metadata = json.dumps({"rework_retry": retry_num})
 
-    new_dev_jr = await conn.fetchrow(
-        """
-        INSERT INTO run_steps (run_id, role, step_order, status, pause_after, metadata)
-        VALUES ($1, 'dev-jr', $2, 'pending', FALSE, $3::jsonb)
-        RETURNING id
-        """,
+    roles_to_requeue = ["dev-jr", "dev-sr"]
+    has_qa = await conn.fetchval(
+        "SELECT 1 FROM run_steps WHERE run_id = $1 AND role = 'qa' LIMIT 1",
         UUID(run_id),
-        base + 1,
-        rework_metadata,
     )
-    await conn.execute(
-        """
-        INSERT INTO run_steps (run_id, role, step_order, status, pause_after, metadata)
-        VALUES ($1, 'dev-sr', $2, 'pending', FALSE, $3::jsonb)
-        """,
+    has_judge = await conn.fetchval(
+        "SELECT 1 FROM run_steps WHERE run_id = $1 AND role = 'judge' LIMIT 1",
         UUID(run_id),
-        base + 2,
-        rework_metadata,
     )
+    if has_qa:
+        roles_to_requeue.append("qa")
+    if has_judge:
+        roles_to_requeue.append("judge")
+
+    new_dev_jr = None
+    for offset, role in enumerate(roles_to_requeue, start=1):
+        row = await conn.fetchrow(
+            """
+            INSERT INTO run_steps (run_id, role, step_order, status, pause_after, metadata)
+            VALUES ($1, $2, $3, 'pending', FALSE, $4::jsonb)
+            RETURNING id
+            """,
+            UUID(run_id),
+            role,
+            base + offset,
+            rework_metadata,
+        )
+        if role == "dev-jr":
+            new_dev_jr = row
+
+    if new_dev_jr is None:
+        return False
 
     new_step_id = str(new_dev_jr["id"])
     logger.info(
@@ -315,5 +348,5 @@ async def _maybe_rework(
 
 @app.task(name="app.tasks.execute_step", bind=True, max_retries=3)
 def execute_step(self, *, run_id: str, step_id: str) -> None:
-    """Execute a single run step using the registered stub agent."""
+    """Execute a single run step using the registered agent module."""
     asyncio.run(_run_step(run_id, step_id))

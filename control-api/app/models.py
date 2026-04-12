@@ -443,7 +443,12 @@ class ArtifactType(str, Enum):
 WORKFLOW_STEPS: dict[str, list[tuple[str, bool]]] = {
     # (role, pause_after)
     "pm_planning":      [("pm", True)],
-    "dev_cycle":        [("dev-jr", False), ("dev-sr", False)],
+    "dev_cycle":        [
+        ("dev-jr", False),
+        ("dev-sr", False),
+        ("qa", False),
+        ("judge", False),
+    ],
     "full_sequential":  [
         ("pm",     True),
         ("dev-jr", False),

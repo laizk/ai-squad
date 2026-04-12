@@ -8,6 +8,8 @@ import {
   buildReason,
   type Approval,
   type ApprovalListResponse,
+  type Artifact,
+  type ArtifactContent,
   type Milestone,
   type MilestoneListResponse,
   type Project,
@@ -16,6 +18,7 @@ import {
   type Revision,
   type RevisionEntityType,
   type RevisionListResponse,
+  type RunListResponse,
   type Task,
   type TaskListResponse,
   type TeamMember,
@@ -29,6 +32,16 @@ type TimelineEntry = {
   entityId: string;
   entityLabel: string;
   revision: Revision;
+};
+
+type MachineEvidence = {
+  runId: string;
+  judgeArtifact: Artifact | null;
+  qaArtifact: Artifact | null;
+  judgeSummary: string | null;
+  judgeScore: number | null;
+  qaStatus: string | null;
+  qaSummary: string | null;
 };
 
 const milestoneStatuses = [
@@ -70,7 +83,7 @@ async function fetchProject(projectId: string) {
     const tasksByMilestoneMap = Object.fromEntries(tasksByMilestone) as Record<string, Task[]>;
     const assignments = await apiRequest<ProjectAssignmentListResponse>(`/api/v1/projects/${projectId}/team`);
     const teamMembers = await apiRequest<TeamMemberListResponse>("/api/v1/team-members");
-    const [timeline, approvals] = await Promise.all([
+    const [timeline, approvals, machineEvidence] = await Promise.all([
       fetchTimeline(
         project,
         milestones.items,
@@ -78,7 +91,8 @@ async function fetchProject(projectId: string) {
         assignments.items,
         teamMembers.items
       ),
-      apiRequest<ApprovalListResponse>(`/api/v1/entities/project/${projectId}/approvals`).catch(() => ({ total: 0, items: [] as Approval[] }))
+      apiRequest<ApprovalListResponse>(`/api/v1/entities/project/${projectId}/approvals`).catch(() => ({ total: 0, items: [] as Approval[] })),
+      fetchLatestMachineEvidence(projectId)
     ]);
 
     return {
@@ -88,7 +102,8 @@ async function fetchProject(projectId: string) {
       timeline,
       assignments: assignments.items,
       teamMembers: teamMembers.items,
-      approvals: approvals.items
+      approvals: approvals.items,
+      machineEvidence
     };
   } catch (error) {
     if (error instanceof Error && error.message === "Project not found") {
@@ -153,6 +168,54 @@ async function fetchTimeline(
   return batches
     .flat()
     .sort((a, b) => b.revision.created_at.localeCompare(a.revision.created_at));
+}
+
+async function fetchLatestMachineEvidence(projectId: string): Promise<MachineEvidence | null> {
+  const runs = await apiRequest<RunListResponse>(`/api/v1/runs?project_id=${projectId}&per_page=20`).catch(
+    () => ({ total: 0, items: [] })
+  );
+
+  for (const run of runs.items) {
+    const artifacts = await apiRequest<Artifact[]>(`/api/v1/runs/${run.id}/artifacts`).catch(() => [] as Artifact[]);
+    const judgeArtifact = [...artifacts].reverse().find((artifact) => artifact.artifact_type === "rubric_score") ?? null;
+    const qaArtifact = [...artifacts].reverse().find((artifact) => artifact.artifact_type === "test_results") ?? null;
+
+    if (!judgeArtifact && !qaArtifact) {
+      continue;
+    }
+
+    const judgePayload = judgeArtifact
+      ? parseArtifactBody<{ score?: number; recommendation?: string }>(await fetchArtifactBody(judgeArtifact.id))
+      : null;
+    const qaPayload = qaArtifact
+      ? parseArtifactBody<{ status?: string; summary?: string }>(await fetchArtifactBody(qaArtifact.id))
+      : null;
+
+    return {
+      runId: run.id,
+      judgeArtifact,
+      qaArtifact,
+      judgeSummary: judgePayload?.recommendation ?? null,
+      judgeScore: typeof judgePayload?.score === "number" ? judgePayload.score : null,
+      qaStatus: qaPayload?.status ?? null,
+      qaSummary: qaPayload?.summary ?? null
+    };
+  }
+
+  return null;
+}
+
+async function fetchArtifactBody(artifactId: string): Promise<string> {
+  const artifact = await apiRequest<ArtifactContent>(`/api/v1/artifacts/${artifactId}/content`);
+  return artifact.body;
+}
+
+function parseArtifactBody<T>(body: string): T | null {
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    return null;
+  }
 }
 
 function formatTimestamp(iso: string): string {
@@ -804,6 +867,9 @@ async function createApprovalAction(_state: FormState, formData: FormData): Prom
   const evidenceType = String(formData.get("evidence_type") ?? "");
   const externalUrl = String(formData.get("external_url") ?? "").trim() || null;
   const evidenceDescription = String(formData.get("evidence_description") ?? "").trim();
+  const artifactIds = formData.getAll("artifact_id").map((value) => String(value).trim()).filter(Boolean);
+  const artifactEvidenceTypes = formData.getAll("artifact_evidence_type").map((value) => String(value).trim());
+  const artifactDescriptions = formData.getAll("artifact_description").map((value) => String(value).trim());
 
   if (!projectId) {
     return formError("Project ID is missing.");
@@ -822,6 +888,12 @@ async function createApprovalAction(_state: FormState, formData: FormData): Prom
   }
 
   try {
+    const machineEvidence = artifactIds.map((artifactId, index) => ({
+      evidence_type: artifactEvidenceTypes[index] || "artifact",
+      artifact_id: artifactId,
+      description: artifactDescriptions[index] || "Attached machine-generated evidence from the latest workflow run."
+    }));
+
     await apiRequest(`/api/v1/approvals`, {
       method: "POST",
       body: {
@@ -832,6 +904,7 @@ async function createApprovalAction(_state: FormState, formData: FormData): Prom
         comment,
         override_used: false,
         evidence: [
+          ...machineEvidence,
           {
             evidence_type: evidenceType,
             external_url: externalUrl,
@@ -850,10 +923,12 @@ async function createApprovalAction(_state: FormState, formData: FormData): Prom
 
 function ApprovalPanel({
   project,
-  approvals
+  approvals,
+  machineEvidence
 }: {
   project: Project;
   approvals: Approval[];
+  machineEvidence: MachineEvidence | null;
 }) {
   return (
     <article className="card">
@@ -885,6 +960,11 @@ function ApprovalPanel({
                     <li key={ev.id} className="evidence-item">
                       <span className="evidence-type">{ev.evidence_type}</span>
                       <span>{ev.description}</span>
+                      {ev.artifact_id ? (
+                        <Link href={`/artifacts/${ev.artifact_id}`} className="text-link">
+                          artifact
+                        </Link>
+                      ) : null}
                       {ev.external_url ? (
                         <a href={ev.external_url} className="text-link" target="_blank" rel="noreferrer">
                           {ev.external_url}
@@ -915,6 +995,55 @@ function ApprovalPanel({
             <p className="eyebrow">Approve / reject</p>
             <h3>Record decision for v{project.current_version}</h3>
           </div>
+        </div>
+
+        <div className="subtle-panel">
+          <p className="eyebrow">Machine evidence</p>
+          {machineEvidence ? (
+            <>
+              <p className="meta">
+                Latest run: <Link href={`/runs/${machineEvidence.runId}`} className="text-link">{machineEvidence.runId.slice(0, 8)}</Link>
+              </p>
+              {machineEvidence.judgeArtifact ? (
+                <>
+                  <input type="hidden" name="artifact_id" value={machineEvidence.judgeArtifact.id} />
+                  <input type="hidden" name="artifact_evidence_type" value="artifact" />
+                  <input
+                    type="hidden"
+                    name="artifact_description"
+                    value={`Judge rubric from run ${machineEvidence.runId.slice(0, 8)}${machineEvidence.judgeScore !== null ? ` with score ${machineEvidence.judgeScore}` : ""}.`}
+                  />
+                  <p>
+                    Judge rubric: <Link href={`/artifacts/${machineEvidence.judgeArtifact.id}`} className="text-link">{machineEvidence.judgeArtifact.name}</Link>
+                    {machineEvidence.judgeScore !== null ? ` (score ${machineEvidence.judgeScore})` : ""}
+                  </p>
+                  {machineEvidence.judgeSummary ? <p className="meta">{machineEvidence.judgeSummary}</p> : null}
+                </>
+              ) : (
+                <p className="meta">No judge artifact found on recent runs.</p>
+              )}
+              {machineEvidence.qaArtifact ? (
+                <>
+                  <input type="hidden" name="artifact_id" value={machineEvidence.qaArtifact.id} />
+                  <input type="hidden" name="artifact_evidence_type" value="test_result" />
+                  <input
+                    type="hidden"
+                    name="artifact_description"
+                    value={`QA test results from run ${machineEvidence.runId.slice(0, 8)}${machineEvidence.qaStatus ? ` with status ${machineEvidence.qaStatus}` : ""}.`}
+                  />
+                  <p>
+                    QA results: <Link href={`/artifacts/${machineEvidence.qaArtifact.id}`} className="text-link">{machineEvidence.qaArtifact.name}</Link>
+                    {machineEvidence.qaStatus ? ` (${machineEvidence.qaStatus})` : ""}
+                  </p>
+                  {machineEvidence.qaSummary ? <p className="meta">{machineEvidence.qaSummary}</p> : null}
+                </>
+              ) : (
+                <p className="meta">No QA artifact found on recent runs.</p>
+              )}
+            </>
+          ) : (
+            <p className="meta">No recent judge or QA artifacts are available yet for this project.</p>
+          )}
         </div>
 
         <label className="field">
@@ -989,7 +1118,7 @@ export default async function ProjectDetailPage({
 }: {
   params: { projectId: string };
 }) {
-  const { project, milestones, tasksByMilestone, timeline, assignments, teamMembers, approvals } = await fetchProject(params.projectId);
+  const { project, milestones, tasksByMilestone, timeline, assignments, teamMembers, approvals, machineEvidence } = await fetchProject(params.projectId);
 
   return (
     <main className="shell page-stack">
@@ -1090,7 +1219,7 @@ export default async function ProjectDetailPage({
         </ActionForm>
       </article>
 
-      <ApprovalPanel project={project} approvals={approvals} />
+      <ApprovalPanel project={project} approvals={approvals} machineEvidence={machineEvidence} />
 
       <article className="card">
         <div className="section-head">

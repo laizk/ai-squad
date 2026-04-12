@@ -55,6 +55,17 @@ class TestRunCreation:
         for step in active[1:]:
             assert step["pause_after"] is False
 
+    def test_create_dev_cycle_run(self, client, project_id):
+        payload = _make_run_payload(project_id, "dev_cycle")
+        resp = client.post("/runs", json=payload)
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        active = [s for s in data["steps"] if s["status"] != "skipped"]
+        assert len(active) == 4
+        roles = [s["role"] for s in active]
+        assert roles == ["dev-jr", "dev-sr", "qa", "judge"]
+        assert all(step["pause_after"] is False for step in active)
+
     def test_idempotent_create_returns_same_run(self, client, project_id):
         key = f"idempotent-{uuid4().hex}"
         payload = {**_make_run_payload(project_id), "idempotency_key": key}
