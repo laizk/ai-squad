@@ -13,6 +13,7 @@ from app.routers.planning import router as planning_router
 from app.routers.projects import router as projects_router
 from app.routers.revisions import router as revisions_router
 from app.routers.runs import router as runs_router
+from app.routers.sandbox import router as sandbox_router
 from app.routers.team_members import router as team_members_router
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ app.include_router(revisions_router)
 app.include_router(team_members_router)
 app.include_router(approvals_router)
 app.include_router(runs_router)
+app.include_router(sandbox_router)
 app.include_router(artifacts_router)
 
 

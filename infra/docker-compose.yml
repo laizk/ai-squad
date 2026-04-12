@@ -56,6 +56,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
       MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-squad}:${POSTGRES_PASSWORD:-changeme-local}@postgres:5432/${POSTGRES_DB:-squad}
       REDIS_URL: redis://redis:6379/0
+      SANDBOX_DISPATCHER_URL: http://sandbox-dispatcher:8090
     ports:
       - "8000:8000"
     healthcheck:
@@ -117,6 +118,34 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       PM_MODEL: ${PM_MODEL:-qwen3.5-35b-a3b-q4}
       GITHUB_SVC_URL: http://github-svc:9000
+      SANDBOX_DISPATCHER_URL: http://sandbox-dispatcher:8090
+
+  sandbox-dispatcher:
+    build:
+      context: ../sandbox-dispatcher
+      dockerfile: Dockerfile
+    container_name: squad-sandbox-dispatcher
+    restart: unless-stopped
+    environment:
+      SANDBOX_IO_PATH: /sandbox-io
+      SANDBOX_DISPATCH_TIMEOUT: "120"
+    volumes:
+      - sandbox_io:/sandbox-io
+    ports:
+      - "8090:8090"
+
+  sandbox-runner:
+    build:
+      context: ../sandbox-runner
+      dockerfile: Dockerfile
+    container_name: squad-sandbox-runner
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      SANDBOX_IO_PATH: /sandbox-io
+      SANDBOX_POLL_INTERVAL: "0.5"
+    volumes:
+      - sandbox_io:/sandbox-io
 
   github-svc:
     build:
@@ -140,3 +169,5 @@ volumes:
     name: squad-postgres-data
   redis_data:
     name: squad-redis-data
+  sandbox_io:
+    name: squad-sandbox-io
