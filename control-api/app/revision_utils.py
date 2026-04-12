@@ -86,3 +86,19 @@ async def insert_revision(
         json.dumps(jsonable_encoder(before_snapshot)) if before_snapshot is not None else None,
         json.dumps(jsonable_encoder(after_snapshot)),
     )
+    await conn.execute(
+        """
+        UPDATE approvals
+           SET is_stale = TRUE,
+               stale_at = COALESCE(stale_at, NOW()),
+               updated_at = NOW()
+         WHERE entity_type = $1
+           AND entity_id = $2
+           AND approved_revision_number < $3
+           AND is_stale = FALSE
+           AND status != 'pending'
+        """,
+        entity_type,
+        entity_id,
+        revision_number,
+    )

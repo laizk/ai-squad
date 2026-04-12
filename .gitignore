@@ -8,6 +8,7 @@ __pycache__/
 /.mypy_cache/
 /.ruff_cache/
 /node_modules/
+node_modules/
 /coverage/
 /htmlcov/
 /dist/
@@ -21,4 +22,6 @@ __pycache__/
 /ollama_models/
 /playwright-report/
 /test-results/
+playwright-report/
+test-results/
 *.log

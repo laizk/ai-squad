@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProjectStatus(str, Enum):
@@ -67,6 +67,22 @@ class EntityType(str, Enum):
     project_assignment = "project_assignment"
     milestone = "milestone"
     task = "task"
+
+
+class ApprovalStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    changes_requested = "changes_requested"
+
+
+class EvidenceType(str, Enum):
+    artifact = "artifact"
+    test_result = "test_result"
+    screenshot = "screenshot"
+    log = "log"
+    github_link = "github_link"
+    other = "other"
 
 
 class ReasonCategory(str, Enum):
@@ -147,6 +163,70 @@ class RevisionListResponse(BaseModel):
     entity_type: EntityType
     entity_id: UUID
     revisions: list[RevisionResponse]
+
+
+class ApprovalEvidenceInput(BaseModel):
+    evidence_type: EvidenceType
+    artifact_id: UUID | None = None
+    external_url: str | None = None
+    description: str = Field(min_length=1, max_length=1000)
+
+
+class ApprovalEvidenceResponse(BaseModel):
+    id: UUID
+    approval_id: UUID
+    evidence_type: EvidenceType
+    artifact_id: UUID | None
+    external_url: str | None
+    description: str
+    created_at: datetime
+
+
+class ApprovalCreate(BaseModel):
+    entity_type: EntityType
+    entity_id: UUID
+    approved_revision_number: int = Field(ge=1)
+    status: ApprovalStatus
+    comment: str = Field(min_length=10)
+    override_used: bool = False
+    override_reason: str | None = None
+    evidence: list[ApprovalEvidenceInput] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_approval(self) -> "ApprovalCreate":
+        if self.status == ApprovalStatus.pending:
+            raise ValueError("Approval decisions must use approved, rejected, or changes_requested status")
+
+        if self.override_used and not self.override_reason:
+            raise ValueError("override_reason is required when override_used is true")
+
+        if not self.override_used and self.override_reason is not None:
+            raise ValueError("override_reason is only allowed when override_used is true")
+
+        return self
+
+
+class ApprovalResponse(BaseModel):
+    id: UUID
+    entity_type: EntityType
+    entity_id: UUID
+    approved_revision_number: int
+    status: ApprovalStatus
+    comment: str
+    override_used: bool
+    override_reason: str | None
+    is_stale: bool
+    stale_at: datetime | None
+    decided_by: str
+    decided_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    evidence: list[ApprovalEvidenceResponse]
+
+
+class ApprovalListResponse(BaseModel):
+    total: int
+    items: list[ApprovalResponse]
 
 
 class TeamMemberBase(BaseModel):
