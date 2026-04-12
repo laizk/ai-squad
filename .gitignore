@@ -8,6 +8,8 @@ __pycache__/
 /.mypy_cache/
 /.ruff_cache/
 /node_modules/
+/admin-web/.next/
+/logs/
 node_modules/
 /coverage/
 /htmlcov/
