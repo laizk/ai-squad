@@ -73,6 +73,12 @@ async def _fetch_approval_or_404(conn: Any, approval_id: UUID) -> Any:
     return row
 
 
+async def _ensure_artifact_exists(conn: Any, artifact_id: UUID) -> None:
+    artifact = await conn.fetchrow("SELECT id FROM artifacts WHERE id = $1", artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+
+
 async def _fetch_approval_evidence(conn: Any, approval_id: UUID) -> list[dict[str, Any]]:
     rows = await conn.fetch(
         """
@@ -157,6 +163,8 @@ async def create_approval(payload: ApprovalCreate) -> ApprovalResponse:
 
             approval_id = approval_row["id"]
             for item in payload.evidence:
+                if item.artifact_id is not None:
+                    await _ensure_artifact_exists(conn, item.artifact_id)
                 await conn.execute(
                     """
                     INSERT INTO approval_evidence (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+from uuid import uuid4
 
 
 def _approval_payload(entity_type: str, entity_id: str, revision_number: int, **overrides: object) -> dict[str, object]:
@@ -137,3 +138,31 @@ def test_stale_revision_approval_requires_override(
     assert override_approval["override_used"] is True
     assert override_approval["override_reason"] is not None
     assert override_approval["is_stale"] is True
+
+
+def test_approval_rejects_unknown_artifact_evidence(
+    client: httpx.Client,
+    project_payload: dict[str, object],
+) -> None:
+    project_response = client.post("/projects", json=project_payload)
+    project_response.raise_for_status()
+    project = project_response.json()
+
+    response = client.post(
+        "/approvals",
+        json=_approval_payload(
+            "project",
+            project["id"],
+            1,
+            evidence=[
+                {
+                    "evidence_type": "artifact",
+                    "artifact_id": str(uuid4()),
+                    "description": "This approval intentionally references a missing artifact to verify validation.",
+                }
+            ],
+        ),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Artifact not found"
