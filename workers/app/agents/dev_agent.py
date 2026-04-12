@@ -34,8 +34,12 @@ logger = logging.getLogger(__name__)
 GITHUB_SVC_URL      = os.environ.get("GITHUB_SVC_URL",      "http://github-svc:9000")
 CONTROL_API_URL     = os.environ.get("CONTROL_API_URL",     "http://control-api:8000")
 SANDBOX_TIMEOUT     = float(os.environ.get("SANDBOX_TIMEOUT", "60"))
-# Override PM_MODEL for dev-jr specifically when set
-DEV_JR_MODEL        = os.environ.get("DEV_JR_MODEL", "") or PM_MODEL
+
+# Per-agent provider config — falls back to shared PM_ vars when unset
+DEV_JR_PROVIDER     = os.environ.get("DEV_JR_PROVIDER", "").strip().lower() or PM_LLM_PROVIDER
+DEV_JR_BASE_URL     = os.environ.get("DEV_JR_BASE_URL", "").strip()
+DEV_JR_MODEL        = os.environ.get("DEV_JR_MODEL",    "").strip() or PM_MODEL
+DEV_JR_API_KEY      = os.environ.get("DEV_JR_API_KEY",  "").strip()
 
 # ── Output contract ────────────────────────────────────────────────────────────
 
@@ -223,15 +227,21 @@ def _summarise_tasks(tasks_body: str | None) -> str:
         return tasks_body[:1000]
 
 
+def _resolve_dev_jr_url() -> str:
+    if DEV_JR_BASE_URL:
+        return DEV_JR_BASE_URL.rstrip("/")
+    if DEV_JR_PROVIDER == "ollama":
+        return OLLAMA_URL.rstrip("/")
+    return _resolve_base_url()
+
+
 def _call_model(user_message: str) -> str:
-    provider = PM_LLM_PROVIDER
-    base_url = _resolve_base_url()
+    provider = DEV_JR_PROVIDER
+    base_url = _resolve_dev_jr_url()
 
     logger.info(
         "Dev agent calling provider=%s model=%s base_url=%s",
-        provider,
-        DEV_JR_MODEL,
-        base_url,
+        provider, DEV_JR_MODEL, base_url,
     )
 
     with _local_model_call_lock(provider):
@@ -241,7 +251,7 @@ def _call_model(user_message: str) -> str:
             return _call_openai_compat(base_url, user_message)
 
     raise RuntimeError(
-        f"Unsupported PM_LLM_PROVIDER for dev agent: {provider}"
+        f"Unsupported DEV_JR_PROVIDER for dev agent: {provider}"
     )
 
 
@@ -279,8 +289,9 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
         "stream": False,
     }
     headers = {"Content-Type": "application/json"}
-    if PM_API_KEY:
-        headers["Authorization"] = f"Bearer {PM_API_KEY}"
+    api_key = DEV_JR_API_KEY or PM_API_KEY
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     try:
         response = httpx.post(

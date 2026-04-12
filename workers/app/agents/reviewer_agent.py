@@ -28,8 +28,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Override PM_MODEL for dev-sr (reviewer) specifically when set
-DEV_SR_MODEL = os.environ.get("DEV_SR_MODEL", "") or PM_MODEL
+# Per-agent provider config — falls back to shared PM_ vars when unset
+DEV_SR_PROVIDER     = os.environ.get("DEV_SR_PROVIDER", "").strip().lower() or PM_LLM_PROVIDER
+DEV_SR_BASE_URL     = os.environ.get("DEV_SR_BASE_URL", "").strip()
+DEV_SR_MODEL        = os.environ.get("DEV_SR_MODEL",    "").strip() or PM_MODEL
+DEV_SR_API_KEY      = os.environ.get("DEV_SR_API_KEY",  "").strip()
 
 VALID_VERDICTS = {"approved", "changes_requested", "rejected"}
 VALID_SEVERITIES = {"info", "warning", "critical"}
@@ -220,9 +223,18 @@ def _build_user_message(
     return "\n\n".join(parts)
 
 
+def _resolve_dev_sr_url() -> str:
+    if DEV_SR_BASE_URL:
+        return DEV_SR_BASE_URL.rstrip("/")
+    if DEV_SR_PROVIDER == "ollama":
+        from app.agents.pm_agent import OLLAMA_URL
+        return OLLAMA_URL.rstrip("/")
+    return _resolve_base_url()
+
+
 def _call_model(user_message: str) -> str:
-    provider = PM_LLM_PROVIDER
-    base_url = _resolve_base_url()
+    provider = DEV_SR_PROVIDER
+    base_url = _resolve_dev_sr_url()
 
     logger.info(
         "Reviewer agent calling provider=%s model=%s base_url=%s",
@@ -235,7 +247,7 @@ def _call_model(user_message: str) -> str:
         if provider in OPENAI_COMPAT_PROVIDERS:
             return _call_openai_compat(base_url, user_message)
 
-    raise RuntimeError(f"Unsupported PM_LLM_PROVIDER for reviewer agent: {provider}")
+    raise RuntimeError(f"Unsupported DEV_SR_PROVIDER for reviewer agent: {provider}")
 
 
 def _call_ollama(base_url: str, user_message: str) -> str:
@@ -272,8 +284,9 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
         "stream": False,
     }
     headers = {"Content-Type": "application/json"}
-    if PM_API_KEY:
-        headers["Authorization"] = f"Bearer {PM_API_KEY}"
+    api_key = DEV_SR_API_KEY or PM_API_KEY
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     try:
         response = httpx.post(
