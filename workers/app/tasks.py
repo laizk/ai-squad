@@ -15,7 +15,7 @@ from uuid import UUID
 
 import asyncpg
 
-from app.agents import pm_agent
+from app.agents import dev_agent, pm_agent
 from app.celery_app import app
 from app.stubs import reviewer_stub
 
@@ -28,8 +28,8 @@ DATABASE_URL = os.environ.get(
 
 # Map role → agent/stub module
 STUB_REGISTRY = {
-    "pm":     pm_agent,      # real Ollama-backed PM agent (P4)
-    "dev-jr": reviewer_stub,
+    "pm":     pm_agent,      # real model-backed PM agent (P4)
+    "dev-jr": dev_agent,     # real model-backed dev agent (P5)
     "dev-sr": reviewer_stub,
     "qa":     reviewer_stub,
     "judge":  reviewer_stub,
@@ -98,6 +98,18 @@ async def _run_step(run_id: str, step_id: str) -> None:
             desc = project["description"] or ""
             brief = f"{name}\n\n{desc}".strip()
 
+        # load prior artifacts for this run (gives downstream agents PM output etc.)
+        prior_rows = await conn.fetch(
+            """
+            SELECT artifact_type, name, body
+              FROM artifacts
+             WHERE run_id = $1
+             ORDER BY created_at ASC
+            """,
+            UUID(run_id),
+        )
+        prior_artifacts = [dict(r) for r in prior_rows]
+
         # run the agent/stub
         context = {
             "run_id": run_id,
@@ -105,6 +117,7 @@ async def _run_step(run_id: str, step_id: str) -> None:
             "project_id": str(run["project_id"]),
             "task_id": str(run["task_id"]) if run["task_id"] else None,
             "brief": brief,
+            "prior_artifacts": prior_artifacts,
         }
         artifacts = stub.run(context)
 
