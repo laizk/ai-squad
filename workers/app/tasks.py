@@ -26,6 +26,9 @@ DATABASE_URL = os.environ.get(
     "postgresql://squad_app:squadapp-local@localhost:5432/squad",
 )
 
+# How many times dev-jr may be reworked before reviewer verdict is accepted as-is
+MAX_REWORK_RETRIES = int(os.environ.get("DEV_REWORK_MAX_RETRIES", "2"))
+
 # Map role → agent/stub module
 STUB_REGISTRY = {
     "pm":     pm_agent,      # real model-backed PM agent (P4)
@@ -156,6 +159,12 @@ async def _run_step(run_id: str, step_id: str) -> None:
             UUID(step_id),
         )
 
+        # Rework loop — only fires after a reviewer (dev-sr) step
+        if role == "dev-sr":
+            reworked = await _maybe_rework(conn, run_id, str(run["project_id"]), artifacts)
+            if reworked:
+                return  # new dev-jr + dev-sr inserted and dispatched
+
         pause_after = step["pause_after"]
 
         if pause_after:
@@ -220,6 +229,88 @@ async def _run_step(run_id: str, step_id: str) -> None:
             pass
     finally:
         await conn.close()
+
+
+async def _maybe_rework(
+    conn: asyncpg.Connection,
+    run_id: str,
+    project_id: str,
+    new_artifacts: list[dict],
+) -> bool:
+    """Insert a new dev-jr + dev-sr step pair when reviewer requests changes.
+
+    Returns True if a rework was queued (caller should return immediately).
+    Returns False if verdict is not changes_requested, or retries are exhausted.
+    """
+    # Find review_findings in the artifacts just produced by this reviewer step
+    review_body = next(
+        (a["body"] for a in new_artifacts if a["artifact_type"] == "review_findings"),
+        None,
+    )
+    if not review_body:
+        return False
+
+    try:
+        review = json.loads(review_body)
+    except Exception:
+        return False
+
+    if review.get("verdict") != "changes_requested":
+        return False
+
+    # Count how many dev-jr steps have already run (original + any rework steps)
+    dev_jr_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM run_steps WHERE run_id = $1 AND role = 'dev-jr'",
+        UUID(run_id),
+    )
+    retry_num = int(dev_jr_count)  # e.g. 1 = first rework
+
+    if retry_num > MAX_REWORK_RETRIES:
+        logger.info(
+            "Run %s: rework limit reached (%d/%d) — accepting reviewer verdict as-is",
+            run_id, retry_num - 1, MAX_REWORK_RETRIES,
+        )
+        return False
+
+    # Append two new steps after the current highest step_order
+    max_order = await conn.fetchval(
+        "SELECT MAX(step_order) FROM run_steps WHERE run_id = $1",
+        UUID(run_id),
+    )
+    base = (max_order or 0)
+
+    rework_metadata = json.dumps({"rework_retry": retry_num})
+
+    new_dev_jr = await conn.fetchrow(
+        """
+        INSERT INTO run_steps (run_id, role, step_order, status, pause_after, metadata)
+        VALUES ($1, 'dev-jr', $2, 'pending', FALSE, $3::jsonb)
+        RETURNING id
+        """,
+        UUID(run_id),
+        base + 1,
+        rework_metadata,
+    )
+    await conn.execute(
+        """
+        INSERT INTO run_steps (run_id, role, step_order, status, pause_after, metadata)
+        VALUES ($1, 'dev-sr', $2, 'pending', FALSE, $3::jsonb)
+        """,
+        UUID(run_id),
+        base + 2,
+        rework_metadata,
+    )
+
+    new_step_id = str(new_dev_jr["id"])
+    logger.info(
+        "Run %s: reviewer requested changes — queuing rework %d/%d (new dev-jr step %s)",
+        run_id, retry_num, MAX_REWORK_RETRIES, new_step_id,
+    )
+    execute_step.apply_async(
+        kwargs={"run_id": run_id, "step_id": new_step_id},
+        queue="squad.steps",
+    )
+    return True
 
 
 @app.task(name="app.tasks.execute_step", bind=True, max_retries=3)
