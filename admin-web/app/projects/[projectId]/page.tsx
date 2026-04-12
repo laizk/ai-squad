@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
+import { ActionForm } from "../../components/action-form";
 import {
   apiRequest,
   buildReason,
@@ -18,6 +19,8 @@ import {
   type TeamMember,
   type TeamMemberListResponse
 } from "../../lib/api";
+import { formError, formErrorFromUnknown, formSuccess, type FormState } from "../../lib/form-state";
+import { getRevisionDiffLines } from "../../lib/revision-diff";
 
 type TimelineEntry = {
   entityType: RevisionEntityType;
@@ -63,10 +66,15 @@ async function fetchProject(projectId: string) {
       })
     );
     const tasksByMilestoneMap = Object.fromEntries(tasksByMilestone) as Record<string, Task[]>;
-
-    const timeline = await fetchTimeline(project, milestones.items, tasksByMilestoneMap);
     const assignments = await apiRequest<ProjectAssignmentListResponse>(`/api/v1/projects/${projectId}/team`);
     const teamMembers = await apiRequest<TeamMemberListResponse>("/api/v1/team-members");
+    const timeline = await fetchTimeline(
+      project,
+      milestones.items,
+      tasksByMilestoneMap,
+      assignments.items,
+      teamMembers.items
+    );
 
     return {
       project,
@@ -87,9 +95,12 @@ async function fetchProject(projectId: string) {
 async function fetchTimeline(
   project: Project,
   milestones: Milestone[],
-  tasksByMilestone: Record<string, Task[]>
+  tasksByMilestone: Record<string, Task[]>,
+  assignments: ProjectAssignment[],
+  teamMembers: TeamMember[]
 ): Promise<TimelineEntry[]> {
   const allTasks: Task[] = Object.values(tasksByMilestone).flat();
+  const memberNames = new Map(teamMembers.map((member) => [member.id, member.display_name]));
 
   const requests: Promise<TimelineEntry[]>[] = [
     apiRequest<RevisionListResponse>(`/api/v1/revisions/project/${project.id}`)
@@ -116,6 +127,16 @@ async function fetchTimeline(
           entityType: "task" as const,
           entityId: task.id,
           entityLabel: task.title,
+          revision
+        })))
+        .catch(() => [])
+    ),
+    ...assignments.map((assignment) =>
+      apiRequest<RevisionListResponse>(`/api/v1/revisions/project_assignment/${assignment.id}`)
+        .then((response) => response.revisions.map((revision) => ({
+          entityType: "project_assignment" as const,
+          entityId: assignment.id,
+          entityLabel: memberNames.get(assignment.team_member_id) ?? "Assigned team member",
           revision
         })))
         .catch(() => [])
@@ -160,6 +181,7 @@ function RevisionTimeline({ entries }: { entries: TimelineEntry[] }) {
               </div>
               <p className="timeline-summary">{entry.revision.change_summary}</p>
               <p className="timeline-reason">{entry.revision.reason.detail}</p>
+              <RevisionDiff revision={entry.revision} />
               {entry.revision.reason.references.length > 0 ? (
                 <ul className="timeline-refs">
                   {entry.revision.reason.references.map((reference) => (
@@ -179,7 +201,32 @@ function RevisionTimeline({ entries }: { entries: TimelineEntry[] }) {
   );
 }
 
-async function createMilestoneAction(formData: FormData) {
+function RevisionDiff({ revision }: { revision: Revision }) {
+  const lines = getRevisionDiffLines(revision);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return (
+    <dl className="timeline-diff">
+      {lines.map((line) => (
+        <div key={line.key} className="timeline-diff-row">
+          <dt>{line.label}</dt>
+          <dd>
+            {line.before !== null ? <span className="timeline-diff-before">{line.before}</span> : null}
+            {line.before !== null && line.after !== null ? (
+              <span className="timeline-diff-arrow" aria-hidden="true">→</span>
+            ) : null}
+            {line.after !== null ? <span className="timeline-diff-after">{line.after}</span> : null}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+async function createMilestoneAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const projectId = String(formData.get("project_id") ?? "");
@@ -189,7 +236,7 @@ async function createMilestoneAction(formData: FormData) {
   const acceptanceCriteriaText = String(formData.get("acceptance_criteria") ?? "").trim();
 
   if (!projectId || !title) {
-    throw new Error("Project and milestone title are required");
+    return formError("Project and milestone title are required.");
   }
 
   const acceptanceCriteria = acceptanceCriteriaText
@@ -197,26 +244,31 @@ async function createMilestoneAction(formData: FormData) {
     .map((item) => item.trim())
     .filter(Boolean);
 
-  await apiRequest(`/api/v1/projects/${projectId}/milestones`, {
-    method: "POST",
-    body: {
-      title,
-      description: description || null,
-      status: "planned",
-      display_order: 0,
-      acceptance_criteria: acceptanceCriteria,
-      due_date: dueDate || null,
-      reason: buildReason(
-        "initial_creation",
-        "Creating a milestone from the admin web so the human operator can structure and review project delivery."
-      )
-    }
-  });
+  try {
+    await apiRequest(`/api/v1/projects/${projectId}/milestones`, {
+      method: "POST",
+      body: {
+        title,
+        description: description || null,
+        status: "planned",
+        display_order: 0,
+        acceptance_criteria: acceptanceCriteria,
+        due_date: dueDate || null,
+        reason: buildReason(
+          "initial_creation",
+          "Creating a milestone from the admin web so the human operator can structure and review project delivery."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Milestone creation failed.");
+  }
 
   revalidatePath(`/projects/${projectId}`);
+  return formSuccess("Milestone added.");
 }
 
-async function updateMilestoneStatusAction(formData: FormData) {
+async function updateMilestoneStatusAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const projectId = String(formData.get("project_id") ?? "");
@@ -225,25 +277,30 @@ async function updateMilestoneStatusAction(formData: FormData) {
   const status = String(formData.get("status") ?? "");
 
   if (!projectId || !milestoneId || !title || !milestoneStatuses.includes(status as (typeof milestoneStatuses)[number])) {
-    throw new Error("Valid milestone update data is required");
+    return formError("Valid milestone update data is required.");
   }
 
-  await apiRequest(`/api/v1/milestones/${milestoneId}`, {
-    method: "PATCH",
-    body: {
-      title,
-      status,
-      reason: buildReason(
-        "scope_change",
-        "Updating milestone review status from the admin web so human progress reflects the current planning state."
-      )
-    }
-  });
+  try {
+    await apiRequest(`/api/v1/milestones/${milestoneId}`, {
+      method: "PATCH",
+      body: {
+        title,
+        status,
+        reason: buildReason(
+          "scope_change",
+          "Updating milestone review status from the admin web so human progress reflects the current planning state."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Milestone update failed.");
+  }
 
   revalidatePath(`/projects/${projectId}`);
+  return formSuccess("Milestone updated.");
 }
 
-async function createTaskAction(formData: FormData) {
+async function createTaskAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const projectId = String(formData.get("project_id") ?? "");
@@ -255,14 +312,14 @@ async function createTaskAction(formData: FormData) {
   const acceptanceCriteriaText = String(formData.get("acceptance_criteria") ?? "").trim();
 
   if (!projectId || !milestoneId || !title) {
-    throw new Error("Project, milestone, and task title are required");
+    return formError("Project, milestone, and task title are required.");
   }
 
   if (!taskPriorities.includes(priority as (typeof taskPriorities)[number])) {
-    throw new Error("Task priority is invalid");
+    return formError("Task priority is invalid.");
   }
   if (assignedRole && !teamRoles.includes(assignedRole as (typeof teamRoles)[number])) {
-    throw new Error("Assigned role is invalid");
+    return formError("Assigned role is invalid.");
   }
 
   const acceptanceCriteria = acceptanceCriteriaText
@@ -270,25 +327,30 @@ async function createTaskAction(formData: FormData) {
     .map((item) => item.trim())
     .filter(Boolean);
 
-  await apiRequest(`/api/v1/milestones/${milestoneId}/tasks`, {
-    method: "POST",
-    body: {
-      title,
-      description: description || null,
-      priority,
-      assigned_role: assignedRole || null,
-      acceptance_criteria: acceptanceCriteria,
-      reason: buildReason(
-        "initial_creation",
-        "Creating a task from the admin web so delivery work is visible under the milestone and can be reviewed."
-      )
-    }
-  });
+  try {
+    await apiRequest(`/api/v1/milestones/${milestoneId}/tasks`, {
+      method: "POST",
+      body: {
+        title,
+        description: description || null,
+        priority,
+        assigned_role: assignedRole || null,
+        acceptance_criteria: acceptanceCriteria,
+        reason: buildReason(
+          "initial_creation",
+          "Creating a task from the admin web so delivery work is visible under the milestone and can be reviewed."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Task creation failed.");
+  }
 
   revalidatePath(`/projects/${projectId}`);
+  return formSuccess("Task added.");
 }
 
-async function updateTaskStatusAction(formData: FormData) {
+async function updateTaskStatusAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const projectId = String(formData.get("project_id") ?? "");
@@ -297,22 +359,27 @@ async function updateTaskStatusAction(formData: FormData) {
   const status = String(formData.get("status") ?? "");
 
   if (!projectId || !taskId || !title || !taskStatuses.includes(status as (typeof taskStatuses)[number])) {
-    throw new Error("Valid task update data is required");
+    return formError("Valid task update data is required.");
   }
 
-  await apiRequest(`/api/v1/tasks/${taskId}`, {
-    method: "PATCH",
-    body: {
-      title,
-      status,
-      reason: buildReason(
-        "fix",
-        "Updating task execution state from the admin web so the milestone view reflects the latest human-reviewed status."
-      )
-    }
-  });
+  try {
+    await apiRequest(`/api/v1/tasks/${taskId}`, {
+      method: "PATCH",
+      body: {
+        title,
+        status,
+        reason: buildReason(
+          "fix",
+          "Updating task execution state from the admin web so the milestone view reflects the latest human-reviewed status."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Task update failed.");
+  }
 
   revalidatePath(`/projects/${projectId}`);
+  return formSuccess("Task updated.");
 }
 
 function TaskCard({ projectId, task }: { projectId: string; task: Task }) {
@@ -340,7 +407,7 @@ function TaskCard({ projectId, task }: { projectId: string; task: Task }) {
         </ul>
       ) : null}
 
-      <form action={updateTaskStatusAction} className="inline-form">
+      <ActionForm action={updateTaskStatusAction} className="inline-form">
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="task_id" value={task.id} />
         <input type="hidden" name="title" value={task.title} />
@@ -357,7 +424,7 @@ function TaskCard({ projectId, task }: { projectId: string; task: Task }) {
         <button type="submit" className="button-secondary">
           Update task
         </button>
-      </form>
+      </ActionForm>
     </article>
   );
 }
@@ -437,21 +504,21 @@ function TeamAssignmentCard({
                     Disabled: {assignment.disable_reason}
                   </p>
                 )}
-                <form action={toggleAssignmentAction} className="inline-form">
+                <ActionForm action={toggleAssignmentAction} className="inline-form">
                   <input type="hidden" name="project_id" value={projectId} />
                   <input type="hidden" name="team_member_id" value={assignment.team_member_id} />
                   <input type="hidden" name="is_enabled" value={assignment.is_enabled ? "false" : "true"} />
                   <button type="submit" className="button-secondary btn-sm">
                     {assignment.is_enabled ? "Disable assignment" : "Re-enable assignment"}
                   </button>
-                </form>
+                </ActionForm>
               </li>
             );
           })}
         </ul>
       )}
 
-      <form action={assignTeamMemberAction} className="form-stack form-slab">
+      <ActionForm action={assignTeamMemberAction} className="form-stack form-slab" resetOnSuccess>
         <input type="hidden" name="project_id" value={projectId} />
         <div className="section-head tight">
           <div>
@@ -505,7 +572,7 @@ function TeamAssignmentCard({
             </button>
           </>
         )}
-      </form>
+      </ActionForm>
     </article>
   );
 }
@@ -548,7 +615,7 @@ function MilestoneCard({
         </ul>
       ) : null}
 
-      <form action={updateMilestoneStatusAction} className="inline-form">
+      <ActionForm action={updateMilestoneStatusAction} className="inline-form">
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="milestone_id" value={milestone.id} />
         <input type="hidden" name="title" value={milestone.title} />
@@ -565,7 +632,7 @@ function MilestoneCard({
         <button type="submit" className="button-secondary">
           Update milestone
         </button>
-      </form>
+      </ActionForm>
 
       <div className="task-stack">
         {tasks.length === 0 ? <p className="empty-state">No tasks yet for this milestone.</p> : null}
@@ -574,7 +641,7 @@ function MilestoneCard({
         ))}
       </div>
 
-      <form action={createTaskAction} className="form-stack form-slab">
+      <ActionForm action={createTaskAction} className="form-stack form-slab" resetOnSuccess>
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="milestone_id" value={milestone.id} />
         <div className="section-head tight">
@@ -635,12 +702,12 @@ function MilestoneCard({
         <button type="submit" className="button-primary">
           Add task
         </button>
-      </form>
+      </ActionForm>
     </article>
   );
 }
 
-async function assignTeamMemberAction(formData: FormData) {
+async function assignTeamMemberAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const projectId = String(formData.get("project_id") ?? "");
@@ -649,26 +716,31 @@ async function assignTeamMemberAction(formData: FormData) {
   const providerOverride = String(formData.get("provider_override") ?? "").trim() || null;
 
   if (!projectId || !teamMemberId) {
-    throw new Error("Project and team member are required");
+    return formError("Project and team member are required.");
   }
 
-  await apiRequest(`/api/v1/projects/${projectId}/team`, {
-    method: "POST",
-    body: {
-      team_member_id: teamMemberId,
-      model_override: modelOverride,
-      provider_override: providerOverride,
-      reason: buildReason(
-        "initial_creation",
-        "Assigning a team member to the project so they can begin work on defined tasks and milestones."
-      )
-    }
-  });
+  try {
+    await apiRequest(`/api/v1/projects/${projectId}/team`, {
+      method: "POST",
+      body: {
+        team_member_id: teamMemberId,
+        model_override: modelOverride,
+        provider_override: providerOverride,
+        reason: buildReason(
+          "initial_creation",
+          "Assigning a team member to the project so they can begin work on defined tasks and milestones."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Project assignment failed.");
+  }
 
   revalidatePath(`/projects/${projectId}`);
+  return formSuccess("Team member assigned.");
 }
 
-async function toggleAssignmentAction(formData: FormData) {
+async function toggleAssignmentAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const projectId = String(formData.get("project_id") ?? "");
@@ -676,28 +748,33 @@ async function toggleAssignmentAction(formData: FormData) {
   const isEnabled = String(formData.get("is_enabled") ?? "") === "true";
 
   if (!projectId || !teamMemberId) {
-    throw new Error("Project and team member are required");
+    return formError("Project and team member are required.");
   }
 
-  await apiRequest(`/api/v1/projects/${projectId}/team/${teamMemberId}`, {
-    method: isEnabled ? "PATCH" : "DELETE",
-    body: {
-      ...(isEnabled
-        ? {
-            is_enabled: true,
-            disable_reason: null
-          }
-        : {}),
-      reason: buildReason(
-        "scope_change",
-        isEnabled
-          ? "Re-enabling a project assignment so this team member can resume work under the current project plan."
-          : "Disabling a project assignment so the current staffing plan matches the project scope."
-      )
-    }
-  });
+  try {
+    await apiRequest(`/api/v1/projects/${projectId}/team/${teamMemberId}`, {
+      method: isEnabled ? "PATCH" : "DELETE",
+      body: {
+        ...(isEnabled
+          ? {
+              is_enabled: true,
+              disable_reason: null
+            }
+          : {}),
+        reason: buildReason(
+          "scope_change",
+          isEnabled
+            ? "Re-enabling a project assignment so this team member can resume work under the current project plan."
+            : "Disabling a project assignment so the current staffing plan matches the project scope."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Project assignment update failed.");
+  }
 
   revalidatePath(`/projects/${projectId}`);
+  return formSuccess(isEnabled ? "Assignment re-enabled." : "Assignment disabled.");
 }
 
 export default async function ProjectDetailPage({
@@ -722,6 +799,9 @@ export default async function ProjectDetailPage({
         <div className="hero-meta">
           <span>Version {project.current_version}</span>
           <span>{project.github_org && project.github_repo ? `${project.github_org}/${project.github_repo}` : "No linked repository"}</span>
+          <Link href="/system" className="text-link">
+            System health
+          </Link>
           <Link href="/" className="text-link">
             Back to projects
           </Link>
@@ -766,7 +846,7 @@ export default async function ProjectDetailPage({
           </div>
         </div>
 
-        <form action={createMilestoneAction} className="form-stack">
+        <ActionForm action={createMilestoneAction} className="form-stack" resetOnSuccess>
           <input type="hidden" name="project_id" value={project.id} />
 
           <label className="field">
@@ -800,7 +880,7 @@ export default async function ProjectDetailPage({
           <button type="submit" className="button-primary">
             Add milestone
           </button>
-        </form>
+        </ActionForm>
       </article>
 
       <article className="card">

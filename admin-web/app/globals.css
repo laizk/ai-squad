@@ -195,6 +195,7 @@ body {
 }
 
 .status-active,
+.status-ok,
 .status-approved,
 .status-done {
   color: #1e5f2b;
@@ -202,6 +203,7 @@ body {
   background: rgba(30, 95, 43, 0.08);
 }
 
+.status-degraded,
 .status-paused,
 .status-review,
 .status-qa_check,
@@ -214,6 +216,7 @@ body {
 }
 
 .status-archived,
+.status-error,
 .status-rejected {
   color: #7c2431;
   border-color: rgba(124, 36, 49, 0.25);
@@ -234,6 +237,17 @@ body {
 .task-stack {
   display: grid;
   gap: 14px;
+}
+
+.form-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.form-fieldset[disabled] {
+  opacity: 0.72;
 }
 
 .form-slab {
@@ -296,6 +310,30 @@ body {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 12px;
+}
+
+.form-feedback {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.form-feedback-error {
+  color: #7c2431;
+  border-color: rgba(124, 36, 49, 0.25);
+  background: rgba(124, 36, 49, 0.08);
+}
+
+.form-feedback-success {
+  color: #1e5f2b;
+  border-color: rgba(30, 95, 43, 0.25);
+  background: rgba(30, 95, 43, 0.08);
+}
+
+.inline-form .form-feedback {
+  flex-basis: 100%;
 }
 
 .button-primary,
@@ -427,6 +465,57 @@ code {
   font-size: 0.9rem;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.timeline-diff {
+  margin: 2px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-diff-row {
+  display: grid;
+  gap: 4px;
+}
+
+.timeline-diff-row dt {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.timeline-diff-row dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-diff-before,
+.timeline-diff-after {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.timeline-diff-before {
+  color: #7c2431;
+  background: rgba(124, 36, 49, 0.06);
+}
+
+.timeline-diff-after {
+  color: #1e5f2b;
+  background: rgba(30, 95, 43, 0.08);
+}
+
+.timeline-diff-arrow {
+  color: var(--muted);
+  font-weight: 700;
 }
 
 .timeline-refs {

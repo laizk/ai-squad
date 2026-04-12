@@ -24,9 +24,46 @@ type ApiRequestOptions = {
   body?: unknown;
 };
 
+type ApiValidationDetail = {
+  loc?: Array<string | number>;
+  msg?: string;
+};
+
 async function parseJson(response: Response) {
   const text = await response.text();
   return text ? JSON.parse(text) : null;
+}
+
+function formatApiError(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === "object") {
+    const detail = "detail" in payload ? payload.detail : null;
+    if (typeof detail === "string" && detail.trim()) {
+      return detail;
+    }
+
+    if (Array.isArray(detail)) {
+      const firstIssue = detail.find(
+        (item): item is ApiValidationDetail =>
+          Boolean(item) && typeof item === "object" && typeof item.msg === "string"
+      );
+
+      if (firstIssue?.msg) {
+        const fieldPath = firstIssue.loc
+          ?.filter((part) => part !== "body")
+          .map((part) => String(part))
+          .join(".");
+
+        return fieldPath ? `${fieldPath}: ${firstIssue.msg}` : firstIssue.msg;
+      }
+    }
+
+    const error = "error" in payload ? payload.error : null;
+    if (typeof error === "string" && error.trim()) {
+      return error;
+    }
+  }
+
+  return fallback;
 }
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
@@ -41,7 +78,7 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 
   if (!response.ok) {
     const payload = await parseJson(response).catch(() => null);
-    const detail = payload?.detail ?? payload?.error ?? response.statusText;
+    const detail = formatApiError(payload, response.statusText);
     throw new Error(detail);
   }
 
@@ -191,6 +228,18 @@ export type ProjectAssignment = {
 export type ProjectAssignmentListResponse = {
   total: number;
   items: ProjectAssignment[];
+};
+
+export type HealthResponse = {
+  status: "ok" | "degraded";
+  service: string;
+  version: string;
+  environment: string;
+  phase: string;
+  postgres: "ok" | "error";
+  postgres_detail: string;
+  redis: "ok" | "error";
+  redis_detail: string;
 };
 
 export type RevisionListResponse = {

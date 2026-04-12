@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 
+import { ActionForm } from "../components/action-form";
 import { apiRequest, buildReason, type TeamMember, type TeamMemberListResponse } from "../lib/api";
+import { formError, formErrorFromUnknown, formSuccess, type FormState } from "../lib/form-state";
 
 const teamRoles = ["pm", "ux", "dev-jr", "dev-sr", "qa", "devops", "judge", "custom"] as const;
 const providers = ["ollama", "anthropic", "openai", "custom"] as const;
@@ -10,7 +12,7 @@ async function fetchTeamMembers() {
   return apiRequest<TeamMemberListResponse>("/api/v1/team-members");
 }
 
-async function createTeamMemberAction(formData: FormData) {
+async function createTeamMemberAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const name = String(formData.get("name") ?? "").trim();
@@ -23,7 +25,7 @@ async function createTeamMemberAction(formData: FormData) {
   const isActive = formData.get("is_active") === "on";
 
   if (!name || !displayName || !role || !model) {
-    throw new Error("Name, display name, role, and model are required");
+    return formError("Name, display name, role, and model are required.");
   }
 
   const skills = skillsText
@@ -31,25 +33,30 @@ async function createTeamMemberAction(formData: FormData) {
     .map((item) => item.trim())
     .filter(Boolean);
 
-  await apiRequest("/api/v1/team-members", {
-    method: "POST",
-    body: {
-      name,
-      display_name: displayName,
-      role,
-      description: description || null,
-      skills,
-      provider,
-      model,
-      is_active: isActive,
-      reason: buildReason(
-        "initial_creation",
-        "Creating a team member from the admin web so project staffing is visible and assignable inside the planning surface."
-      )
-    }
-  });
+  try {
+    await apiRequest("/api/v1/team-members", {
+      method: "POST",
+      body: {
+        name,
+        display_name: displayName,
+        role,
+        description: description || null,
+        skills,
+        provider,
+        model,
+        is_active: isActive,
+        reason: buildReason(
+          "initial_creation",
+          "Creating a team member from the admin web so project staffing is visible and assignable inside the planning surface."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Team member creation failed.");
+  }
 
   revalidatePath("/team-members");
+  return formSuccess("Team member created.");
 }
 
 export default async function TeamMembersPage() {
@@ -73,6 +80,9 @@ export default async function TeamMembersPage() {
 
         <div className="hero-meta">
           <span>{members.length} total team members</span>
+          <Link href="/system" className="text-link">
+            System health
+          </Link>
           <Link href="/" className="text-link">
             Back to projects
           </Link>
@@ -88,7 +98,7 @@ export default async function TeamMembersPage() {
             </div>
           </div>
 
-          <form action={createTeamMemberAction} className="form-stack">
+          <ActionForm action={createTeamMemberAction} className="form-stack" resetOnSuccess>
             <div className="form-grid">
               <label className="field">
                 <span>Name</span>
@@ -156,7 +166,7 @@ export default async function TeamMembersPage() {
             <button type="submit" className="button-primary">
               Create team member
             </button>
-          </form>
+          </ActionForm>
         </article>
 
         <article className="card">

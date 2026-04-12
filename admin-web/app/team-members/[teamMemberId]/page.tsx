@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
+import { ActionForm } from "../../components/action-form";
 import {
   apiRequest,
   buildReason,
@@ -9,6 +10,8 @@ import {
   type RevisionListResponse,
   type TeamMember
 } from "../../lib/api";
+import { formError, formErrorFromUnknown, formSuccess, type FormState } from "../../lib/form-state";
+import { getRevisionDiffLines } from "../../lib/revision-diff";
 
 const teamRoles = ["pm", "ux", "dev-jr", "dev-sr", "qa", "devops", "judge", "custom"] as const;
 const providers = ["ollama", "anthropic", "openai", "custom"] as const;
@@ -32,7 +35,7 @@ async function fetchTeamMember(teamMemberId: string) {
   }
 }
 
-async function updateTeamMemberAction(formData: FormData) {
+async function updateTeamMemberAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const teamMemberId = String(formData.get("team_member_id") ?? "");
@@ -46,7 +49,7 @@ async function updateTeamMemberAction(formData: FormData) {
   const isActive = formData.get("is_active") === "on";
 
   if (!teamMemberId || !name || !displayName || !role || !model) {
-    throw new Error("Team member update is missing required fields");
+    return formError("Team member update is missing required fields.");
   }
 
   const skills = skillsText
@@ -54,26 +57,31 @@ async function updateTeamMemberAction(formData: FormData) {
     .map((item) => item.trim())
     .filter(Boolean);
 
-  await apiRequest(`/api/v1/team-members/${teamMemberId}`, {
-    method: "PATCH",
-    body: {
-      name,
-      display_name: displayName,
-      role,
-      description: description || null,
-      skills,
-      provider,
-      model,
-      is_active: isActive,
-      reason: buildReason(
-        "scope_change",
-        "Updating a team member from the admin web so assignment defaults and role metadata stay aligned with current delivery needs."
-      )
-    }
-  });
+  try {
+    await apiRequest(`/api/v1/team-members/${teamMemberId}`, {
+      method: "PATCH",
+      body: {
+        name,
+        display_name: displayName,
+        role,
+        description: description || null,
+        skills,
+        provider,
+        model,
+        is_active: isActive,
+        reason: buildReason(
+          "scope_change",
+          "Updating a team member from the admin web so assignment defaults and role metadata stay aligned with current delivery needs."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Team member update failed.");
+  }
 
   revalidatePath("/team-members");
   revalidatePath(`/team-members/${teamMemberId}`);
+  return formSuccess("Team member updated.");
 }
 
 function formatTimestamp(iso: string): string {
@@ -110,6 +118,9 @@ export default async function TeamMemberDetailPage({
           <span>{member.provider}</span>
           <span>{member.model}</span>
           <span>Version {member.current_version}</span>
+          <Link href="/system" className="text-link">
+            System health
+          </Link>
           <Link href="/team-members" className="text-link">
             Back to team
           </Link>
@@ -125,7 +136,7 @@ export default async function TeamMemberDetailPage({
             </div>
           </div>
 
-          <form action={updateTeamMemberAction} className="form-stack">
+          <ActionForm action={updateTeamMemberAction} className="form-stack">
             <input type="hidden" name="team_member_id" value={member.id} />
 
             <div className="form-grid">
@@ -187,7 +198,7 @@ export default async function TeamMemberDetailPage({
             <button type="submit" className="button-primary">
               Save team member
             </button>
-          </form>
+          </ActionForm>
         </article>
 
         <article className="card">
@@ -265,6 +276,8 @@ export default async function TeamMemberDetailPage({
 }
 
 function TeamMemberRevisionRow({ revision }: { revision: Revision }) {
+  const lines = getRevisionDiffLines(revision);
+
   return (
     <li className="timeline-row">
       <div className="timeline-marker" aria-hidden="true" />
@@ -278,6 +291,22 @@ function TeamMemberRevisionRow({ revision }: { revision: Revision }) {
         </div>
         <p className="timeline-summary">{revision.change_summary}</p>
         <p className="timeline-reason">{revision.reason.detail}</p>
+        {lines.length > 0 ? (
+          <dl className="timeline-diff">
+            {lines.map((line) => (
+              <div key={line.key} className="timeline-diff-row">
+                <dt>{line.label}</dt>
+                <dd>
+                  {line.before !== null ? <span className="timeline-diff-before">{line.before}</span> : null}
+                  {line.before !== null && line.after !== null ? (
+                    <span className="timeline-diff-arrow" aria-hidden="true">→</span>
+                  ) : null}
+                  {line.after !== null ? <span className="timeline-diff-after">{line.after}</span> : null}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
         <div className="timeline-meta">
           <span>{revision.actor}</span>
           <span>{formatTimestamp(revision.created_at)}</span>

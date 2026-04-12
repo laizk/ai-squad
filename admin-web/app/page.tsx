@@ -2,10 +2,12 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 
 import { apiRequest, buildReason, type ProjectListResponse } from "./lib/api";
+import { ActionForm } from "./components/action-form";
+import { formError, formErrorFromUnknown, formSuccess, type FormState } from "./lib/form-state";
 
 const phase = process.env.NEXT_PUBLIC_APP_PHASE ?? "P0";
 
-async function createProjectAction(formData: FormData) {
+async function createProjectAction(_state: FormState, formData: FormData): Promise<FormState> {
   "use server";
 
   const name = String(formData.get("name") ?? "").trim();
@@ -14,24 +16,29 @@ async function createProjectAction(formData: FormData) {
   const githubRepo = String(formData.get("github_repo") ?? "").trim();
 
   if (!name) {
-    throw new Error("Project name is required");
+    return formError("Project name is required.");
   }
 
-  await apiRequest("/api/v1/projects", {
-    method: "POST",
-    body: {
-      name,
-      description: description || null,
-      github_org: githubOrg || null,
-      github_repo: githubRepo || null,
-      reason: buildReason(
-        "initial_creation",
-        "Creating a project from the admin web so the planning graph can be reviewed and edited in the UI."
-      )
-    }
-  });
+  try {
+    await apiRequest("/api/v1/projects", {
+      method: "POST",
+      body: {
+        name,
+        description: description || null,
+        github_org: githubOrg || null,
+        github_repo: githubRepo || null,
+        reason: buildReason(
+          "initial_creation",
+          "Creating a project from the admin web so the planning graph can be reviewed and edited in the UI."
+        )
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Project creation failed.");
+  }
 
   revalidatePath("/");
+  return formSuccess("Project created.");
 }
 
 export default async function HomePage() {
@@ -51,6 +58,9 @@ export default async function HomePage() {
           <span>Phase {phase}</span>
           <Link href="/team-members" className="text-link">
             Manage team members
+          </Link>
+          <Link href="/system" className="text-link">
+            View system health
           </Link>
         </div>
       </section>
@@ -98,7 +108,7 @@ export default async function HomePage() {
             </div>
           </div>
 
-          <form action={createProjectAction} className="form-stack">
+          <ActionForm action={createProjectAction} className="form-stack" resetOnSuccess>
             <label className="field">
               <span>Name</span>
               <input name="name" type="text" placeholder="Planning workspace" required />
@@ -128,7 +138,7 @@ export default async function HomePage() {
             <button type="submit" className="button-primary">
               Create project
             </button>
-          </form>
+          </ActionForm>
         </article>
       </section>
     </main>
