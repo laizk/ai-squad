@@ -89,6 +89,7 @@ def run(context: dict) -> list[dict]:
     brief = context.get("brief", "No brief provided.")
 
     user_message = (
+        f"/no_think\n\n"
         f"Project ID: {project_id}\n\n"
         f"Project brief:\n{brief}"
     )

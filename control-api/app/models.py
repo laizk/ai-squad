@@ -436,6 +436,7 @@ class ArtifactType(str, Enum):
     recommendation = "recommendation"
     decision_log = "decision_log"
     dev_output = "dev_output"
+    sandbox_result = "sandbox_result"
     other = "other"
 
 

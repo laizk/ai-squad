@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 
 from app.agents.pm_agent import (
@@ -26,6 +27,9 @@ from app.agents.pm_agent import (
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Override PM_MODEL for dev-sr (reviewer) specifically when set
+DEV_SR_MODEL = os.environ.get("DEV_SR_MODEL", "") or PM_MODEL
 
 VALID_VERDICTS = {"approved", "changes_requested", "rejected"}
 VALID_SEVERITIES = {"info", "warning", "critical"}
@@ -165,7 +169,7 @@ def _build_user_message(
     dev_output: str | None,
     sandbox_json: str | None,
 ) -> str:
-    parts = [f"Project brief:\n{brief}"]
+    parts = ["/no_think", f"Project brief:\n{brief}"]
 
     if tasks_json:
         try:
@@ -222,7 +226,7 @@ def _call_model(user_message: str) -> str:
 
     logger.info(
         "Reviewer agent calling provider=%s model=%s base_url=%s",
-        provider, PM_MODEL, base_url,
+        provider, DEV_SR_MODEL, base_url,
     )
 
     with _local_model_call_lock(provider):
@@ -236,7 +240,7 @@ def _call_model(user_message: str) -> str:
 
 def _call_ollama(base_url: str, user_message: str) -> str:
     payload = {
-        "model": PM_MODEL,
+        "model": DEV_SR_MODEL,
         "stream": False,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -259,7 +263,7 @@ def _call_ollama(base_url: str, user_message: str) -> str:
 
 def _call_openai_compat(base_url: str, user_message: str) -> str:
     payload = {
-        "model": PM_MODEL,
+        "model": DEV_SR_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_message},

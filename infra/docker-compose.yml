@@ -117,7 +117,10 @@ services:
       PM_REQUEST_TIMEOUT_SECONDS: ${PM_REQUEST_TIMEOUT_SECONDS:-600}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       PM_MODEL: ${PM_MODEL:-qwen3.5-35b-a3b-q4}
+      DEV_JR_MODEL: ${DEV_JR_MODEL:-}
+      DEV_SR_MODEL: ${DEV_SR_MODEL:-}
       GITHUB_SVC_URL: http://github-svc:9000
+      CONTROL_API_URL: http://control-api:8000
       SANDBOX_DISPATCHER_URL: http://sandbox-dispatcher:8090
 
   sandbox-dispatcher:

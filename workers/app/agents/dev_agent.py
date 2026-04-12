@@ -31,7 +31,11 @@ from app.agents.pm_agent import (
 
 logger = logging.getLogger(__name__)
 
-GITHUB_SVC_URL = os.environ.get("GITHUB_SVC_URL", "http://github-svc:9000")
+GITHUB_SVC_URL      = os.environ.get("GITHUB_SVC_URL",      "http://github-svc:9000")
+CONTROL_API_URL     = os.environ.get("CONTROL_API_URL",     "http://control-api:8000")
+SANDBOX_TIMEOUT     = float(os.environ.get("SANDBOX_TIMEOUT", "60"))
+# Override PM_MODEL for dev-jr specifically when set
+DEV_JR_MODEL        = os.environ.get("DEV_JR_MODEL", "") or PM_MODEL
 
 # ── Output contract ────────────────────────────────────────────────────────────
 
@@ -76,6 +80,7 @@ def run(context: dict) -> list[dict]:
     tasks_summary = _summarise_tasks(tasks_json)
 
     user_message = (
+        f"/no_think\n\n"
         f"Project ID: {project_id}\n\n"
         f"Project brief:\n{brief}\n\n"
         f"Tasks to implement:\n{tasks_summary}"
@@ -85,11 +90,19 @@ def run(context: dict) -> list[dict]:
     data = _parse_json(raw)
 
     files = data.get("files", [])
+    if not files:
+        raise RuntimeError(
+            "Dev agent model returned no files. "
+            f"Parsed keys: {list(data.keys())}. First 300 chars of raw: {raw[:300]}"
+        )
     commit_message = data.get("commit_message", "feat: ai-squad implementation")
     pr_title = data.get("pr_title", f"AI Squad: implementation for run {run_id[:8]}")
     pr_body = data.get("pr_body", "")
 
     branch = f"ai-squad/run-{run_id[:8]}"
+
+    # Run sandbox before committing — reviewer sees test evidence
+    sandbox_result = _run_sandbox(files)
 
     github_result = _push_to_github(
         run_id=run_id,
@@ -101,19 +114,35 @@ def run(context: dict) -> list[dict]:
     )
 
     dev_output = {
-        "branch": branch,
-        "files_written": [f["path"] for f in files],
+        "branch":         branch,
+        "files_written":  [f["path"] for f in files],
+        # Embed contents so reviewer can read the code
+        "files":          files,
         "commit_message": commit_message,
-        "github": github_result,
+        "github":         github_result,
+        "sandbox": {
+            "exit_code":        sandbox_result.get("exit_code"),
+            "timed_out":        sandbox_result.get("timed_out"),
+            "skipped":          sandbox_result.get("skipped", False),
+        },
     }
 
-    return [
+    artifacts = [
         {
             "artifact_type": "dev_output",
-            "name": "dev_output.json",
-            "body": json.dumps(dev_output, indent=2),
+            "name":          "dev_output.json",
+            "body":          json.dumps(dev_output, indent=2),
         }
     ]
+
+    if not sandbox_result.get("skipped"):
+        artifacts.append({
+            "artifact_type": "sandbox_result",
+            "name":          "sandbox_result.json",
+            "body":          json.dumps(sandbox_result, indent=2),
+        })
+
+    return artifacts
 
 
 def validate(artifact_type: str, body: str) -> bool:
@@ -123,10 +152,50 @@ def validate(artifact_type: str, body: str) -> bool:
         return False
     if artifact_type == "dev_output":
         return all(k in data for k in DEV_OUTPUT_REQUIRED)
+    if artifact_type == "sandbox_result":
+        return "exit_code" in data and "job_id" in data
     return False
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _run_sandbox(files: list[dict]) -> dict:
+    """Run pytest on the generated files via the control-api sandbox proxy.
+
+    Non-fatal: returns a skipped result if the endpoint is unreachable.
+    Detects test files automatically; falls back to plain python check if none found.
+    """
+    has_tests = any(
+        f["path"].startswith("test_") or "/test_" in f["path"] or f["path"].endswith("_test.py")
+        for f in files
+    )
+    command = ["pytest", "-q", "--tb=short"] if has_tests else ["python", "-c", "print('no tests')"]
+
+    try:
+        resp = httpx.post(
+            f"{CONTROL_API_URL}/api/v1/sandbox/execute",
+            json={
+                "files":   files,
+                "command": command,
+                "timeout": SANDBOX_TIMEOUT,
+            },
+            timeout=SANDBOX_TIMEOUT + 30,
+        )
+        if resp.status_code == 503:
+            logger.info("Sandbox unavailable — skipping sandbox execution")
+            return {"skipped": True, "exit_code": None, "job_id": None}
+        resp.raise_for_status()
+        result = resp.json()
+        status = "PASSED" if result.get("exit_code") == 0 else "FAILED"
+        logger.info(
+            "Sandbox %s exit_code=%s duration=%.2fs",
+            status, result.get("exit_code"), result.get("duration_seconds", 0),
+        )
+        return result
+    except Exception as exc:
+        logger.warning("Sandbox call failed (non-fatal): %s", exc)
+        return {"skipped": True, "exit_code": None, "job_id": None, "error": str(exc)}
+
 
 def _find_artifact(prior_artifacts: list[dict], artifact_type: str) -> str | None:
     """Return the body of the most recent artifact matching artifact_type."""
@@ -161,7 +230,7 @@ def _call_model(user_message: str) -> str:
     logger.info(
         "Dev agent calling provider=%s model=%s base_url=%s",
         provider,
-        PM_MODEL,
+        DEV_JR_MODEL,
         base_url,
     )
 
@@ -178,7 +247,7 @@ def _call_model(user_message: str) -> str:
 
 def _call_ollama(base_url: str, user_message: str) -> str:
     payload = {
-        "model": PM_MODEL,
+        "model": DEV_JR_MODEL,
         "stream": False,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -201,7 +270,7 @@ def _call_ollama(base_url: str, user_message: str) -> str:
 
 def _call_openai_compat(base_url: str, user_message: str) -> str:
     payload = {
-        "model": PM_MODEL,
+        "model": DEV_JR_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
