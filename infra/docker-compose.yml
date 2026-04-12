@@ -119,27 +119,13 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      # Internal service URLs are hardcoded — not from .env
       REDIS_URL: redis://redis:6379/0
       WORKER_DATABASE_URL: postgresql://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
-      PM_LLM_PROVIDER: ${PM_LLM_PROVIDER:-llama_cpp}
-      PM_BASE_URL: ${PM_BASE_URL:-http://host.docker.internal:8080/v1}
-      PM_API_KEY: ${PM_API_KEY:-}
-      PM_REQUEST_TIMEOUT_SECONDS: ${PM_REQUEST_TIMEOUT_SECONDS:-600}
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
-      PM_MODEL: ${PM_MODEL:-qwen3.5-35b-a3b-q4}
-      # dev-jr: Ollama + smaller code-focused model
-      DEV_JR_PROVIDER: ${DEV_JR_PROVIDER:-ollama}
-      DEV_JR_BASE_URL: ${DEV_JR_BASE_URL:-}
-      DEV_JR_MODEL: ${DEV_JR_MODEL:-qwen2.5-coder:7b}
-      DEV_JR_API_KEY: ${DEV_JR_API_KEY:-}
-      # dev-sr: same llama-server as PM (35B for judgment)
-      DEV_SR_PROVIDER: ${DEV_SR_PROVIDER:-}
-      DEV_SR_BASE_URL: ${DEV_SR_BASE_URL:-}
-      DEV_SR_MODEL: ${DEV_SR_MODEL:-}
-      DEV_SR_API_KEY: ${DEV_SR_API_KEY:-}
       GITHUB_SVC_URL: http://github-svc:9000
       CONTROL_API_URL: http://control-api:8000
       SANDBOX_DISPATCHER_URL: http://sandbox-dispatcher:8090
+      # LLM provider config, model names, API keys, timeouts come from env_file (.env)
 
   sandbox-dispatcher:
     build:
