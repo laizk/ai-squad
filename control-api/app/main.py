@@ -11,6 +11,7 @@ from app.routers.approvals import router as approvals_router
 from app.routers.artifacts import router as artifacts_router
 from app.routers.planning import router as planning_router
 from app.routers.projects import router as projects_router
+from app.routers.prompt_evals import router as prompt_evals_router
 from app.routers.reconcile import router as reconcile_router
 from app.routers.revisions import router as revisions_router
 from app.routers.runs import router as runs_router
@@ -46,6 +47,7 @@ app.include_router(sandbox_router)
 app.include_router(artifacts_router)
 app.include_router(webhooks_router)
 app.include_router(reconcile_router)
+app.include_router(prompt_evals_router)
 
 
 @app.get("/")

@@ -533,6 +533,45 @@ class RunGithubRefUpdate(BaseModel):
     github_pr_number: int | None = None
 
 
+# ── Prompt eval models (P9) ───────────────────────────────────────────────────
+
+class EvalStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class PromptEvalCreate(BaseModel):
+    team_member_id: UUID
+    golden_task_key: str = Field(min_length=1, max_length=255)
+
+
+class PromptEvalResponse(BaseModel):
+    id: UUID
+    team_member_id: UUID
+    revision_number: int
+    golden_task_key: str
+    status: EvalStatus
+    output_artifact: dict[str, Any] | None = None
+    scores: dict[str, Any] | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+
+
+class PromptEvalListResponse(BaseModel):
+    total: int
+    items: list[PromptEvalResponse]
+
+
+class PromptEvalCompareResponse(BaseModel):
+    team_member_id: UUID
+    golden_task_key: str
+    revisions: list[PromptEvalResponse]  # ordered by revision_number desc
+
+
 class RunListResponse(BaseModel):
     total: int
     items: list[RunResponse]

@@ -405,3 +405,75 @@ async def _maybe_rework(
 def execute_step(self, *, run_id: str, step_id: str) -> None:
     """Execute a single run step using the registered agent module."""
     asyncio.run(_run_step(run_id, step_id))
+
+
+# ── Prompt eval task (P9) ─────────────────────────────────────────────────────
+
+@app.task(name="app.tasks.run_prompt_eval", bind=True, max_retries=1)
+def run_prompt_eval(self, *, eval_id: str, team_member_id: str, golden_task_key: str) -> None:
+    """Run a prompt evaluation against a golden task and persist the scores."""
+    asyncio.run(_run_eval(eval_id, team_member_id, golden_task_key))
+
+
+async def _run_eval(eval_id: str, team_member_id: str, golden_task_key: str) -> None:
+    from app.eval.golden_tasks import get_golden_task
+    from app.eval.scorer import score_output
+
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        await conn.execute(
+            "UPDATE prompt_eval_runs SET status = 'running', started_at = $1 WHERE id = $2",
+            datetime.now(timezone.utc), UUID(eval_id),
+        )
+
+        task_def = get_golden_task(golden_task_key)
+        role = task_def["role"]
+        brief = task_def["brief"]
+        expected_signals = task_def["expected_signals"]
+
+        stub = STUB_REGISTRY.get(role)
+        if stub is None:
+            raise RuntimeError(f"No agent registered for role: {role}")
+
+        context = {
+            "run_id": eval_id,
+            "step_id": eval_id,
+            "project_id": team_member_id,
+            "task_id": None,
+            "brief": brief,
+            "prior_artifacts": [],
+        }
+        artifacts = stub.run(context)
+
+        scores = score_output(artifacts, expected_signals)
+
+        output_artifact = artifacts[0] if artifacts else {}
+
+        await conn.execute(
+            """
+            UPDATE prompt_eval_runs
+               SET status = 'completed',
+                   output_artifact = $1::jsonb,
+                   scores = $2::jsonb,
+                   completed_at = $3
+             WHERE id = $4
+            """,
+            json.dumps(output_artifact),
+            json.dumps(scores),
+            datetime.now(timezone.utc),
+            UUID(eval_id),
+        )
+        logger.info("Eval %s completed: overall=%s pass=%s", eval_id, scores["overall"], scores["pass"])
+
+    except Exception as exc:
+        logger.exception("Eval %s failed: %s", eval_id, exc)
+        try:
+            await conn.execute(
+                "UPDATE prompt_eval_runs SET status = 'failed', error_message = $1, completed_at = $2 WHERE id = $3",
+                str(exc), datetime.now(timezone.utc), UUID(eval_id),
+            )
+        except Exception:
+            pass
+        raise
+    finally:
+        await conn.close()
