@@ -16,7 +16,7 @@ from uuid import UUID
 import asyncpg
 import httpx
 
-from app.agents import dev_agent, judge_agent, pm_agent, qa_agent, reviewer_agent
+from app.agents import dev_agent, devops_agent, judge_agent, pm_agent, qa_agent, reviewer_agent, ux_agent
 from app.celery_app import app
 
 logger = logging.getLogger(__name__)
@@ -33,11 +33,13 @@ MAX_REWORK_RETRIES = int(os.environ.get("DEV_REWORK_MAX_RETRIES", "2"))
 
 # Map role → agent/stub module
 STUB_REGISTRY = {
-    "pm":     pm_agent,      # real model-backed PM agent (P4)
+    "pm":     pm_agent,       # real model-backed PM agent (P4)
     "dev-jr": dev_agent,       # real model-backed dev agent (P5)
     "dev-sr": reviewer_agent,  # real model-backed reviewer (P5)
     "qa":     qa_agent,        # sandbox-backed QA agent (P6)
     "judge":  judge_agent,     # real model-backed judge agent (P6)
+    "ux":     ux_agent,        # UX specialist agent (P8)
+    "devops": devops_agent,    # DevOps specialist agent (P8)
 }
 
 

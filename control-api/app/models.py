@@ -458,7 +458,16 @@ WORKFLOW_STEPS: dict[str, list[tuple[str, bool]]] = {
     ],
 }
 
-OPTIONAL_ROLES_SKIPPED = ["ux", "devops"]
+# Roles that are optional and off by default.
+# Key: role name. Value: insert position — after which mandatory role it slots in
+# (None = append at the end).
+OPTIONAL_ROLES: dict[str, str | None] = {
+    "ux":     "pm",     # UX review runs after PM planning, before dev-jr
+    "devops": "judge",  # DevOps review runs after judge, as final step
+}
+
+# Legacy alias used elsewhere — keep in sync
+OPTIONAL_ROLES_SKIPPED = list(OPTIONAL_ROLES.keys())
 
 
 class RunCreate(BaseModel):
@@ -466,12 +475,21 @@ class RunCreate(BaseModel):
     task_id: UUID | None = None
     workflow_type: str = Field(default="pm_planning", min_length=1, max_length=100)
     idempotency_key: str = Field(min_length=1, max_length=255)
+    # Explicitly opt in to optional specialist steps.
+    # Any role not listed here is inserted as 'skipped' so it remains visible.
+    optional_steps: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_workflow_type(self) -> "RunCreate":
         if self.workflow_type not in WORKFLOW_STEPS:
             raise ValueError(
                 f"workflow_type must be one of: {', '.join(WORKFLOW_STEPS.keys())}"
+            )
+        unknown = [s for s in self.optional_steps if s not in OPTIONAL_ROLES]
+        if unknown:
+            raise ValueError(
+                f"unknown optional_steps: {unknown}. "
+                f"Valid options: {list(OPTIONAL_ROLES.keys())}"
             )
         return self
 

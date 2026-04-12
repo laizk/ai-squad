@@ -8,6 +8,8 @@ Three scenarios:
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 from uuid import uuid4
@@ -18,6 +20,22 @@ import pytest
 # When running inside the control-api container, github-svc is on the Docker
 # internal network. Override with GITHUB_SVC_TEST_URL for external test runs.
 GITHUB_SVC_BASE = os.getenv("GITHUB_SVC_TEST_URL", "http://github-svc:9000")
+
+# Match the secret configured in the container
+_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "ai-squad-local-secret")
+
+
+def _sign(body: bytes) -> str:
+    return "sha256=" + hmac.new(_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _webhook_headers(body: bytes, event: str, delivery: str) -> dict:
+    return {
+        "Content-Type": "application/json",
+        "X-GitHub-Event": event,
+        "X-GitHub-Delivery": delivery,
+        "X-Hub-Signature-256": _sign(body),
+    }
 
 
 # ── Webhook ingestion ─────────────────────────────────────────────────────────
@@ -40,51 +58,46 @@ def _webhook_payload(issue_number: int) -> dict:
 
 def test_webhook_ingest_stores_event(client: httpx.Client) -> None:
     delivery_id = f"p7-test-{uuid4().hex}"
-    payload = _webhook_payload(issue_number=999)
+    body = json.dumps(_webhook_payload(issue_number=999)).encode()
 
     resp = client.post(
         "/webhooks/github",
-        json=payload,
-        headers={
-            "X-GitHub-Event": "issues",
-            "X-GitHub-Delivery": delivery_id,
-        },
+        content=body,
+        headers=_webhook_headers(body, "issues", delivery_id),
     )
     assert resp.status_code == 202, resp.text
-    body = resp.json()
-    assert body["event_type"] == "issues"
-    assert "id" in body
-    assert "received_at" in body
+    data = resp.json()
+    assert data["event_type"] == "issues"
+    assert "id" in data
+    assert "received_at" in data
 
 
-def test_webhook_ingest_missing_content_type_still_works(client: httpx.Client) -> None:
-    """Raw JSON body without explicit headers should still be accepted."""
+def test_webhook_ingest_bad_signature_is_rejected(client: httpx.Client) -> None:
+    body = json.dumps({"action": "ping"}).encode()
     resp = client.post(
         "/webhooks/github",
-        content=json.dumps({"action": "ping", "zen": "P7 test"}),
+        content=body,
         headers={
             "Content-Type": "application/json",
             "X-GitHub-Event": "ping",
+            "X-GitHub-Delivery": uuid4().hex,
+            "X-Hub-Signature-256": "sha256=deadbeef",
         },
     )
-    assert resp.status_code == 202, resp.text
+    assert resp.status_code == 401, resp.text
 
 
 def test_webhook_replay_is_stored_again(client: httpx.Client) -> None:
     """Replaying the same delivery_id stores a second row (append-only)."""
     delivery_id = f"p7-replay-{uuid4().hex}"
-    payload = _webhook_payload(issue_number=1001)
-    headers = {
-        "X-GitHub-Event": "issues",
-        "X-GitHub-Delivery": delivery_id,
-    }
+    body = json.dumps(_webhook_payload(issue_number=1001)).encode()
+    headers = _webhook_headers(body, "issues", delivery_id)
 
-    r1 = client.post("/webhooks/github", json=payload, headers=headers)
-    r2 = client.post("/webhooks/github", json=payload, headers=headers)
+    r1 = client.post("/webhooks/github", content=body, headers=headers)
+    r2 = client.post("/webhooks/github", content=body, headers=headers)
 
     assert r1.status_code == 202
     assert r2.status_code == 202
-    # Both calls succeed; ids must differ (two rows stored)
     assert r1.json()["id"] != r2.json()["id"]
 
 

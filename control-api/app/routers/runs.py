@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.db import open_ready_connection
 from app.models import (
+    OPTIONAL_ROLES,
     OPTIONAL_ROLES_SKIPPED,
     WORKFLOW_STEPS,
     RunCreate,
@@ -141,37 +142,60 @@ async def create_run(payload: RunCreate) -> RunResponse:
             )
             run_id = run_row["id"]
 
-            # create active steps
-            active_steps = WORKFLOW_STEPS[payload.workflow_type]
+            # Build the ordered step sequence. Optional roles are spliced in at
+            # their anchor position (after the anchor role). If the anchor is not
+            # present in this workflow, fallback positions apply:
+            #   ux     → before dev-jr (or first step if dev-jr absent)
+            #   devops → after judge (or last step)
+            # Disabled optional roles are always inserted as 'skipped' so they
+            # remain visible in the run plan.
+            base_steps: list[tuple[str, bool]] = list(WORKFLOW_STEPS[payload.workflow_type])
+            base_roles = [r for r, _ in base_steps]
+            enabled: set[str] = set(payload.optional_steps)
+
+            active_steps: list[tuple[str, bool, bool]] = []  # (role, pause_after, is_skipped)
+            ux_inserted = False
+
+            for role, pause_after in base_steps:
+                # ux fallback: insert before dev-jr when pm is not in the workflow
+                if role == "dev-jr" and not ux_inserted and "pm" not in base_roles:
+                    active_steps.append(("ux", False, "ux" not in enabled))
+                    ux_inserted = True
+
+                active_steps.append((role, pause_after, False))
+
+                # splice optional roles whose anchor matches this role
+                for opt_role, anchor in OPTIONAL_ROLES.items():
+                    if anchor == role:
+                        active_steps.append((opt_role, False, opt_role not in enabled))
+                        if opt_role == "ux":
+                            ux_inserted = True
+
+            # ensure ux is present even if dev-jr and pm are both absent
+            if not ux_inserted:
+                active_steps.insert(0, ("ux", False, "ux" not in enabled))
+
+            # ensure devops is present if judge was not in the workflow
+            if not any(r == "devops" for r, _, _ in active_steps):
+                active_steps.append(("devops", False, "devops" not in enabled))
+
             first_step_id = None
-            for order, (role, pause_after) in enumerate(active_steps, start=1):
+            for order, (role, pause_after, is_skipped) in enumerate(active_steps, start=1):
+                step_status = "skipped" if is_skipped else "pending"
                 step_row = await conn.fetchrow(
                     """
                     INSERT INTO run_steps (run_id, role, step_order, pause_after, status)
-                    VALUES ($1, $2, $3, $4, 'pending')
+                    VALUES ($1, $2, $3, $4, $5)
                     RETURNING id
                     """,
                     run_id,
                     role,
                     order,
                     pause_after,
+                    step_status,
                 )
-                if order == 1:
+                if not is_skipped and first_step_id is None:
                     first_step_id = step_row["id"]
-
-            # create skipped optional steps at the end
-            skip_order = len(active_steps) + 1
-            for role in OPTIONAL_ROLES_SKIPPED:
-                await conn.execute(
-                    """
-                    INSERT INTO run_steps (run_id, role, step_order, status)
-                    VALUES ($1, $2, $3, 'skipped')
-                    """,
-                    run_id,
-                    role,
-                    skip_order,
-                )
-                skip_order += 1
 
         # enqueue first step outside the transaction
         if first_step_id is not None:
