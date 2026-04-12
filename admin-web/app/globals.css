@@ -305,6 +305,18 @@ body {
   justify-self: start;
 }
 
+.field-checkbox {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.field-checkbox input[type="checkbox"] {
+  margin-top: 2px;
+}
+
 .inline-form {
   display: flex;
   flex-wrap: wrap;
@@ -736,6 +748,19 @@ code {
   background: #fef3c7;
   color: #92400e;
   border: 1px solid #fcd34d;
+}
+
+.override-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #dbeafe;
+  color: #1d4ed8;
+  border: 1px solid #93c5fd;
 }
 
 .stale-since {

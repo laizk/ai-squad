@@ -21,7 +21,10 @@ export default defineConfig({
       name: "chrome",
       use: {
         ...devices["Desktop Chrome"],
-        channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL ?? "chrome"
+        channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL ?? "chrome",
+        launchOptions: {
+          args: ["--disable-crashpad-for-testing", "--disable-crash-reporter"]
+        }
       }
     }
   ]

@@ -220,11 +220,22 @@ test("admin web smoke flow covers project, team member, assignment, and revision
     .locator('textarea[name="evidence_description"]')
     .fill("Manual review of revision history confirmed all changes are correctly captured.");
   await approvalPanel.getByRole("button", { name: "Submit decision" }).click();
+  await expect(
+    approvalPanel.getByText("Machine evidence is required unless you record a human override.")
+  ).toBeVisible();
+
+  await approvalPanel.getByLabel(/Record human override/i).check();
+  await approvalPanel
+    .locator('textarea[name="override_reason"]')
+    .fill("Smoke validation is intentionally exercising the explicit human override path before workflow evidence exists.");
+  await approvalPanel.getByRole("button", { name: "Submit decision" }).click();
   await expect(approvalPanel.getByText("Decision recorded.")).toBeVisible();
 
   // Approval item should now be visible
   await expect(approvalPanel.locator(".approval-item").first()).toBeVisible();
   await expect(approvalPanel.locator(".status-chip.status-approved").first()).toBeVisible();
+  await expect(approvalPanel.locator(".override-badge").first()).toBeVisible();
+  await expect(approvalPanel.getByText(/Smoke validation is intentionally exercising the explicit human override path/i)).toBeVisible();
 
   // ── Stale badge: bump the project version via API then reload ────────
   const api = await playwrightRequest.newContext({

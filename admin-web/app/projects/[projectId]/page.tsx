@@ -864,6 +864,8 @@ async function createApprovalAction(_state: FormState, formData: FormData): Prom
   const approvedRevisionNumber = parseInt(String(formData.get("approved_revision_number") ?? ""), 10);
   const status = String(formData.get("status") ?? "");
   const comment = String(formData.get("comment") ?? "").trim();
+  const overrideUsed = formData.get("override_used") === "on";
+  const overrideReason = String(formData.get("override_reason") ?? "").trim() || null;
   const evidenceType = String(formData.get("evidence_type") ?? "");
   const externalUrl = String(formData.get("external_url") ?? "").trim() || null;
   const evidenceDescription = String(formData.get("evidence_description") ?? "").trim();
@@ -886,6 +888,15 @@ async function createApprovalAction(_state: FormState, formData: FormData): Prom
   if (!evidenceDescription) {
     return formError("Evidence description is required.");
   }
+  if (overrideUsed && !overrideReason) {
+    return formError("Override reason is required when recording a human override.");
+  }
+  if (!overrideUsed && overrideReason !== null) {
+    return formError("Select the override option before providing an override reason.");
+  }
+  if (artifactIds.length === 0 && !overrideUsed) {
+    return formError("Machine evidence is required unless you record a human override.");
+  }
 
   try {
     const machineEvidence = artifactIds.map((artifactId, index) => ({
@@ -902,7 +913,8 @@ async function createApprovalAction(_state: FormState, formData: FormData): Prom
         approved_revision_number: approvedRevisionNumber,
         status,
         comment,
-        override_used: false,
+        override_used: overrideUsed,
+        override_reason: overrideReason,
         evidence: [
           ...machineEvidence,
           {
@@ -951,9 +963,15 @@ function ApprovalPanel({
                 {approval.is_stale ? (
                   <span className="stale-badge">stale</span>
                 ) : null}
+                {approval.override_used ? (
+                  <span className="override-badge">override</span>
+                ) : null}
                 <span className="approval-rev">revision {approval.approved_revision_number}</span>
               </div>
               <p className="approval-comment">{approval.comment}</p>
+              {approval.override_used && approval.override_reason ? (
+                <p className="meta">Override reason: {approval.override_reason}</p>
+              ) : null}
               {approval.evidence.length > 0 ? (
                 <ul className="evidence-list">
                   {approval.evidence.map((ev: Approval["evidence"][number]) => (
@@ -1044,6 +1062,10 @@ function ApprovalPanel({
           ) : (
             <p className="meta">No recent judge or QA artifacts are available yet for this project.</p>
           )}
+          <p className="meta">
+            Project approvals require linked machine evidence from QA or judge. If that evidence is unavailable or invalid,
+            record a human override with a reason before submitting.
+          </p>
         </div>
 
         <label className="field">
@@ -1102,6 +1124,20 @@ function ApprovalPanel({
             rows={2}
             required
             placeholder="Describe what this evidence shows and how it supports the decision."
+          />
+        </label>
+
+        <label className="field-checkbox">
+          <input type="checkbox" name="override_used" />
+          <span>Record human override when machine evidence is missing or cannot be trusted.</span>
+        </label>
+
+        <label className="field">
+          <span>Override reason</span>
+          <textarea
+            name="override_reason"
+            rows={2}
+            placeholder="Explain why this decision is proceeding without the expected machine evidence."
           />
         </label>
 
