@@ -15,7 +15,19 @@ The human interface layer is pluggable. The authoritative behavior still lives i
 
 ---
 
-## 2. Human Operator Rules
+## 2. Cross-Model Continuity
+
+When work is handed between Codex, Claude, Cursor, or smaller local models such as Qwen or Gemma, all models should use the same continuation and validation discipline from `docs/LOCAL_MODEL_CONTINUATION.md`.
+
+Treat that file as the shared reference for:
+- read order
+- validation standard
+- frontend and backend design guardrails
+- continuation after partial handovers or dirty worktrees
+
+---
+
+## 3. Human Operator Rules
 
 - Operate the platform through `control-api` and `admin-web`.
 - Do not bypass revisioned mutation paths with manual SQL edits.
@@ -25,7 +37,7 @@ The human interface layer is pluggable. The authoritative behavior still lives i
 
 ---
 
-## 3. Local Stack Expectations
+## 4. Local Stack Expectations
 
 The platform target stack is:
 - postgres
@@ -42,7 +54,7 @@ Early phases may ship a smaller subset. The implementation roadmap in `docs/MILE
 
 ---
 
-## 4. Recommended Human Workflows
+## 5. Recommended Human Workflows
 
 ### Project setup
 1. Create project
@@ -64,7 +76,7 @@ Early phases may ship a smaller subset. The implementation roadmap in `docs/MILE
 
 ---
 
-## 5. What Humans Should Not Do
+## 6. What Humans Should Not Do
 
 - do not edit `revisions` directly
 - do not give workers direct GitHub credentials
@@ -74,7 +86,7 @@ Early phases may ship a smaller subset. The implementation roadmap in `docs/MILE
 
 ---
 
-## 6. Approval Standard
+## 7. Approval Standard
 
 Approval is valid only when:
 - the entity revision under review is current
@@ -86,7 +98,7 @@ If a later edit occurs, previous approval becomes stale and must be revisited.
 
 ---
 
-## 7. Human Verification Checklist
+## 8. Human Verification Checklist
 
 For any serious workflow output, ask:
 - Does this artifact reflect the actual brief or task?
@@ -97,7 +109,7 @@ For any serious workflow output, ask:
 
 ---
 
-## 8. GitHub Usage Guidance
+## 9. GitHub Usage Guidance
 
 GitHub is for visibility, not for dumping every internal detail.
 
@@ -117,7 +129,7 @@ Do not expect to see:
 
 ---
 
-## 9. Terminal-Friendly Commands
+## 10. Terminal-Friendly Commands
 
 Examples of the kind of operations the human interface layer should support:
 
@@ -153,7 +165,7 @@ curl -X POST http://localhost:8000/api/v1/runs \
 
 ---
 
-## 10. Relationship To AGENTS.md
+## 11. Relationship To AGENTS.md
 
 `CLAUDE.md` is about human operation.  
 `AGENTS.md` is about unattended worker behavior.

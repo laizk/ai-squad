@@ -15,7 +15,19 @@ It does not describe how a human operates the platform from a terminal. That bel
 
 ---
 
-## 2. Runtime Assumptions
+## 2. Cross-Model Continuity
+
+When runtime work or code changes are handed between frontier models and smaller local models, use `docs/LOCAL_MODEL_CONTINUATION.md` as the shared continuation reference.
+
+That file is the common guide for:
+- what to read first
+- how to validate real behavior
+- how to preserve existing frontend and backend design choices
+- how to continue safely from handovers and dirty worktrees
+
+---
+
+## 3. Runtime Assumptions
 
 - Agents run as long-lived workers, not one container per task.
 - Workers talk to `control-api`, not directly to PostgreSQL or GitHub.
@@ -25,7 +37,7 @@ It does not describe how a human operates the platform from a terminal. That bel
 
 ---
 
-## 3. Core Tool Boundary
+## 4. Core Tool Boundary
 
 Agent runtimes must use control-api mediated actions for:
 - fetching task context
@@ -43,7 +55,7 @@ Agents must not:
 
 ---
 
-## 4. Canonical Agent Tools
+## 5. Canonical Agent Tools
 
 These tool definitions are the logical contract for the runtime layer.
 
@@ -67,7 +79,7 @@ Pause the run or step with a summary and linked evidence references.
 
 ---
 
-## 5. Required Agent Behavior
+## 6. Required Agent Behavior
 
 1. Read context from control-api at step start.
 2. Resolve role configuration and output contract from control-api.
@@ -80,7 +92,7 @@ Pause the run or step with a summary and linked evidence references.
 
 ---
 
-## 6. Failure Handling
+## 7. Failure Handling
 
 Agents must handle:
 - schema validation failures
@@ -93,7 +105,7 @@ They must not silently swallow these states. The step should fail, retry, or pau
 
 ---
 
-## 7. Artifact Rules
+## 8. Artifact Rules
 
 Artifacts are the contract between steps.
 
@@ -106,7 +118,7 @@ Rules:
 
 ---
 
-## 8. Decision Log Rules
+## 9. Decision Log Rules
 
 Decision logs are required after major reasoning steps, but they are bounded.
 
@@ -120,7 +132,7 @@ They should not become a raw transcript dump of full prompts and full responses 
 
 ---
 
-## 9. Example Runtime Loop
+## 10. Example Runtime Loop
 
 ```python
 config = get_team_member_config(run_step_id)
@@ -154,7 +166,7 @@ log_decision(
 
 ---
 
-## 10. Portability Boundary
+## 11. Portability Boundary
 
 This runtime layer is not the same thing as Claude Code or a terminal-based coding assistant.
 
@@ -168,7 +180,7 @@ Not portable by simple text substitution:
 
 ---
 
-## 11. Audit Expectations
+## 12. Audit Expectations
 
 An acceptable agent step leaves behind:
 - run-step record
