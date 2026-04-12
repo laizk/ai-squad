@@ -78,6 +78,30 @@ async function cancelRunAction(_state: FormState, formData: FormData): Promise<F
   return formSuccess("Run cancelled.");
 }
 
+async function rejectRunAction(_state: FormState, formData: FormData): Promise<FormState> {
+  "use server";
+  const runId = String(formData.get("run_id") ?? "");
+  try {
+    await apiRequest(`/api/v1/runs/${runId}/reject`, { method: "POST" });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Reject failed.");
+  }
+  revalidatePath(`/runs/${runId}`);
+  return formSuccess("Run rejected.");
+}
+
+async function requestChangesAction(_state: FormState, formData: FormData): Promise<FormState> {
+  "use server";
+  const runId = String(formData.get("run_id") ?? "");
+  try {
+    await apiRequest(`/api/v1/runs/${runId}/request-changes`, { method: "POST" });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Request changes failed.");
+  }
+  revalidatePath(`/runs/${runId}`);
+  return formSuccess("Changes requested — step re-queued.");
+}
+
 function StepRow({ step, artifacts }: { step: RunStep; artifacts: Artifact[] }) {
   const stepArtifacts = artifacts.filter((a) => a.run_step_id === step.id);
 
@@ -127,6 +151,8 @@ export default async function RunDetailPage({
   const { run, project, artifacts } = await fetchRunDetail(params.runId);
   const canPause = run.status === "running";
   const canResume = run.status === "paused";
+  const canReject = run.status === "paused";
+  const canRequestChanges = run.status === "paused";
   const canCancel = !["completed", "failed", "cancelled"].includes(run.status);
 
   return (
@@ -158,7 +184,7 @@ export default async function RunDetailPage({
       ) : null}
 
       {/* run controls */}
-      {(canPause || canResume || canCancel) ? (
+      {(canPause || canResume || canReject || canRequestChanges || canCancel) ? (
         <article className="card">
           <div className="section-head tight">
             <div>
@@ -171,6 +197,18 @@ export default async function RunDetailPage({
               <ActionForm action={resumeRunAction} className="inline-form">
                 <input type="hidden" name="run_id" value={run.id} />
                 <button type="submit" className="button-primary">Resume run</button>
+              </ActionForm>
+            ) : null}
+            {canRequestChanges ? (
+              <ActionForm action={requestChangesAction} className="inline-form">
+                <input type="hidden" name="run_id" value={run.id} />
+                <button type="submit" className="button-secondary">Request changes</button>
+              </ActionForm>
+            ) : null}
+            {canReject ? (
+              <ActionForm action={rejectRunAction} className="inline-form">
+                <input type="hidden" name="run_id" value={run.id} />
+                <button type="submit" className="button-danger">Reject run</button>
               </ActionForm>
             ) : null}
             {canPause ? (

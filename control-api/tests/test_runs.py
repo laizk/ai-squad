@@ -132,3 +132,47 @@ class TestRunLifecycle:
     def test_get_nonexistent_run_returns_404(self, client):
         resp = client.get(f"/runs/{uuid4()}")
         assert resp.status_code == 404
+
+    def test_reject_paused_run(self, client, project_id):
+        run_id = client.post("/runs", json=_make_run_payload(project_id)).json()["id"]
+        client.post(f"/runs/{run_id}/pause")
+        resp = client.post(f"/runs/{run_id}/reject")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert data["completed_at"] is not None
+        # remaining pending steps must be skipped
+        assert all(s["status"] != "pending" for s in data["steps"])
+
+    def test_cannot_reject_non_paused_run(self, client, project_id):
+        run_id = client.post("/runs", json=_make_run_payload(project_id)).json()["id"]
+        # run is in 'running' state, not paused
+        resp = client.post(f"/runs/{run_id}/reject")
+        assert resp.status_code == 400
+
+    def test_request_changes_resets_last_completed_step(self, client, project_id):
+        import time
+
+        run_id = client.post("/runs", json=_make_run_payload(project_id)).json()["id"]
+        # pm_planning has pause_after=True on the PM step — wait for workers to complete it
+        for _ in range(30):
+            state = client.get(f"/runs/{run_id}").json()
+            if state["status"] == "paused":
+                break
+            time.sleep(0.5)
+        else:
+            pytest.skip("Run did not reach paused state in time — workers may not be running")
+
+        resp = client.post(f"/runs/{run_id}/request-changes")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "running"
+        assert data["paused_at"] is None
+        # the reset step must be back to pending (PM step was completed, now reset)
+        reset_steps = [s for s in data["steps"] if s["status"] == "pending"]
+        assert len(reset_steps) >= 1
+
+    def test_cannot_request_changes_on_non_paused_run(self, client, project_id):
+        run_id = client.post("/runs", json=_make_run_payload(project_id)).json()["id"]
+        resp = client.post(f"/runs/{run_id}/request-changes")
+        assert resp.status_code == 400

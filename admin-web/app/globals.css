@@ -338,6 +338,7 @@ body {
 
 .button-primary,
 .button-secondary,
+.button-danger,
 .text-link {
   display: inline-flex;
   align-items: center;
@@ -349,7 +350,8 @@ body {
 }
 
 .button-primary,
-.button-secondary {
+.button-secondary,
+.button-danger {
   min-height: 44px;
   padding: 0 16px;
 }
@@ -363,6 +365,12 @@ body {
   border-color: rgba(161, 66, 22, 0.24);
   background: rgba(255, 255, 255, 0.72);
   color: var(--accent);
+}
+
+.button-danger {
+  border-color: rgba(180, 30, 30, 0.32);
+  background: rgba(255, 255, 255, 0.72);
+  color: #b41e1e;
 }
 
 .text-link {

@@ -261,6 +261,93 @@ async def pause_run(run_id: UUID) -> RunResponse:
         await conn.close()
 
 
+@router.post("/runs/{run_id}/reject", response_model=RunResponse)
+async def reject_run(run_id: UUID) -> RunResponse:
+    """Human rejects the paused run entirely — marks it failed, skips remaining steps."""
+    conn = await open_ready_connection()
+    try:
+        async with conn.transaction():
+            row = await _fetch_run_or_404(conn, run_id)
+            if row["status"] != RunStatus.paused.value:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot reject a run with status '{row['status']}'",
+                )
+            await conn.execute(
+                """
+                UPDATE runs
+                   SET status = 'failed', completed_at = $1
+                 WHERE id = $2
+                """,
+                datetime.now(timezone.utc),
+                run_id,
+            )
+            await conn.execute(
+                """
+                UPDATE run_steps
+                   SET status = 'skipped'
+                 WHERE run_id = $1 AND status = 'pending'
+                """,
+                run_id,
+            )
+            row = await _fetch_run_or_404(conn, run_id)
+        return await _build_run_response(conn, row)
+    finally:
+        await conn.close()
+
+
+@router.post("/runs/{run_id}/request-changes", response_model=RunResponse)
+async def request_changes(run_id: UUID) -> RunResponse:
+    """Human requests changes on the last completed step — resets it to pending and re-enqueues."""
+    conn = await open_ready_connection()
+    try:
+        step_to_retry = None
+        async with conn.transaction():
+            row = await _fetch_run_or_404(conn, run_id)
+            if row["status"] != RunStatus.paused.value:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot request changes on a run with status '{row['status']}'",
+                )
+            last_step = await conn.fetchrow(
+                """
+                SELECT * FROM run_steps
+                 WHERE run_id = $1 AND status = 'completed'
+                 ORDER BY step_order DESC
+                 LIMIT 1
+                """,
+                run_id,
+            )
+            if last_step is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No completed step found to request changes on",
+                )
+            await conn.execute(
+                """
+                UPDATE run_steps
+                   SET status = 'pending',
+                       started_at = NULL,
+                       completed_at = NULL,
+                       output_artifact_id = NULL,
+                       error_message = NULL
+                 WHERE id = $1
+                """,
+                last_step["id"],
+            )
+            await conn.execute(
+                "UPDATE runs SET status = 'running', paused_at = NULL WHERE id = $1",
+                run_id,
+            )
+            step_to_retry = last_step
+            row = await _fetch_run_or_404(conn, run_id)
+
+        await _enqueue_step(conn, run_id, step_to_retry["id"])
+        return await _build_run_response(conn, row)
+    finally:
+        await conn.close()
+
+
 @router.post("/runs/{run_id}/resume", response_model=RunResponse)
 async def resume_run(run_id: UUID) -> RunResponse:
     conn = await open_ready_connection()
