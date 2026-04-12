@@ -6,6 +6,8 @@ import { ActionForm } from "../../components/action-form";
 import {
   apiRequest,
   buildReason,
+  type Approval,
+  type ApprovalListResponse,
   type Milestone,
   type MilestoneListResponse,
   type Project,
@@ -68,13 +70,16 @@ async function fetchProject(projectId: string) {
     const tasksByMilestoneMap = Object.fromEntries(tasksByMilestone) as Record<string, Task[]>;
     const assignments = await apiRequest<ProjectAssignmentListResponse>(`/api/v1/projects/${projectId}/team`);
     const teamMembers = await apiRequest<TeamMemberListResponse>("/api/v1/team-members");
-    const timeline = await fetchTimeline(
-      project,
-      milestones.items,
-      tasksByMilestoneMap,
-      assignments.items,
-      teamMembers.items
-    );
+    const [timeline, approvals] = await Promise.all([
+      fetchTimeline(
+        project,
+        milestones.items,
+        tasksByMilestoneMap,
+        assignments.items,
+        teamMembers.items
+      ),
+      apiRequest<ApprovalListResponse>(`/api/v1/entities/project/${projectId}/approvals`).catch(() => ({ total: 0, items: [] as Approval[] }))
+    ]);
 
     return {
       project,
@@ -82,7 +87,8 @@ async function fetchProject(projectId: string) {
       tasksByMilestone: tasksByMilestoneMap,
       timeline,
       assignments: assignments.items,
-      teamMembers: teamMembers.items
+      teamMembers: teamMembers.items,
+      approvals: approvals.items
     };
   } catch (error) {
     if (error instanceof Error && error.message === "Project not found") {
@@ -777,12 +783,213 @@ async function toggleAssignmentAction(_state: FormState, formData: FormData): Pr
   return formSuccess(isEnabled ? "Assignment re-enabled." : "Assignment disabled.");
 }
 
+const approvalStatuses = ["approved", "rejected", "changes_requested"] as const;
+
+const evidenceTypes = [
+  "artifact",
+  "test_result",
+  "screenshot",
+  "log",
+  "github_link",
+  "other"
+] as const;
+
+async function createApprovalAction(_state: FormState, formData: FormData): Promise<FormState> {
+  "use server";
+
+  const projectId = String(formData.get("project_id") ?? "");
+  const approvedRevisionNumber = parseInt(String(formData.get("approved_revision_number") ?? ""), 10);
+  const status = String(formData.get("status") ?? "");
+  const comment = String(formData.get("comment") ?? "").trim();
+  const evidenceType = String(formData.get("evidence_type") ?? "");
+  const externalUrl = String(formData.get("external_url") ?? "").trim() || null;
+  const evidenceDescription = String(formData.get("evidence_description") ?? "").trim();
+
+  if (!projectId) {
+    return formError("Project ID is missing.");
+  }
+  if (!approvalStatuses.includes(status as (typeof approvalStatuses)[number])) {
+    return formError("A valid decision is required.");
+  }
+  if (comment.length < 10) {
+    return formError("Comment must be at least 10 characters.");
+  }
+  if (!evidenceTypes.includes(evidenceType as (typeof evidenceTypes)[number])) {
+    return formError("A valid evidence type is required.");
+  }
+  if (!evidenceDescription) {
+    return formError("Evidence description is required.");
+  }
+
+  try {
+    await apiRequest(`/api/v1/approvals`, {
+      method: "POST",
+      body: {
+        entity_type: "project",
+        entity_id: projectId,
+        approved_revision_number: approvedRevisionNumber,
+        status,
+        comment,
+        override_used: false,
+        evidence: [
+          {
+            evidence_type: evidenceType,
+            external_url: externalUrl,
+            description: evidenceDescription
+          }
+        ]
+      }
+    });
+  } catch (error) {
+    return formErrorFromUnknown(error, "Approval submission failed.");
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  return formSuccess("Decision recorded.");
+}
+
+function ApprovalPanel({
+  project,
+  approvals
+}: {
+  project: Project;
+  approvals: Approval[];
+}) {
+  return (
+    <article className="card">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Review</p>
+          <h2>Approval decisions</h2>
+        </div>
+        <p className="meta">{approvals.length} recorded</p>
+      </div>
+
+      {approvals.length === 0 ? (
+        <p className="empty-state">No approval decisions yet for this project.</p>
+      ) : (
+        <ul className="approval-list">
+          {approvals.map((approval) => (
+            <li key={approval.id} className="approval-item">
+              <div className="approval-head">
+                <span className={`status-chip status-${approval.status}`}>{approval.status}</span>
+                {approval.is_stale ? (
+                  <span className="stale-badge">stale</span>
+                ) : null}
+                <span className="approval-rev">revision {approval.approved_revision_number}</span>
+              </div>
+              <p className="approval-comment">{approval.comment}</p>
+              {approval.evidence.length > 0 ? (
+                <ul className="evidence-list">
+                  {approval.evidence.map((ev: Approval["evidence"][number]) => (
+                    <li key={ev.id} className="evidence-item">
+                      <span className="evidence-type">{ev.evidence_type}</span>
+                      <span>{ev.description}</span>
+                      {ev.external_url ? (
+                        <a href={ev.external_url} className="text-link" target="_blank" rel="noreferrer">
+                          {ev.external_url}
+                        </a>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="approval-meta">
+                <span>{approval.decided_by}</span>
+                <span>{formatTimestamp(approval.decided_at)}</span>
+                {approval.is_stale && approval.stale_at ? (
+                  <span className="stale-since">marked stale {formatTimestamp(approval.stale_at)}</span>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <ActionForm action={createApprovalAction} className="form-stack form-slab" resetOnSuccess>
+        <input type="hidden" name="project_id" value={project.id} />
+        <input type="hidden" name="approved_revision_number" value={project.current_version} />
+
+        <div className="section-head tight">
+          <div>
+            <p className="eyebrow">Approve / reject</p>
+            <h3>Record decision for v{project.current_version}</h3>
+          </div>
+        </div>
+
+        <label className="field">
+          <span>Decision</span>
+          <select name="status" required defaultValue="">
+            <option value="" disabled>Select decision</option>
+            {approvalStatuses.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="field">
+          <span>Comment</span>
+          <textarea
+            name="comment"
+            rows={3}
+            required
+            minLength={10}
+            placeholder="Explain the decision — what was reviewed and why this outcome is warranted."
+          />
+        </label>
+
+        <div className="section-head tight">
+          <div>
+            <p className="eyebrow">Evidence</p>
+            <h4>Attach evidence (required)</h4>
+          </div>
+        </div>
+
+        <div className="form-grid">
+          <label className="field">
+            <span>Type</span>
+            <select name="evidence_type" required defaultValue="">
+              <option value="" disabled>Select type</option>
+              {evidenceTypes.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>External URL</span>
+            <input
+              type="url"
+              name="external_url"
+              placeholder="https://github.com/... (optional)"
+            />
+          </label>
+        </div>
+
+        <label className="field">
+          <span>Evidence description</span>
+          <textarea
+            name="evidence_description"
+            rows={2}
+            required
+            placeholder="Describe what this evidence shows and how it supports the decision."
+          />
+        </label>
+
+        <button type="submit" className="button-primary">
+          Submit decision
+        </button>
+      </ActionForm>
+    </article>
+  );
+}
+
 export default async function ProjectDetailPage({
   params
 }: {
   params: { projectId: string };
 }) {
-  const { project, milestones, tasksByMilestone, timeline, assignments, teamMembers } = await fetchProject(params.projectId);
+  const { project, milestones, tasksByMilestone, timeline, assignments, teamMembers, approvals } = await fetchProject(params.projectId);
 
   return (
     <main className="shell page-stack">
@@ -882,6 +1089,8 @@ export default async function ProjectDetailPage({
           </button>
         </ActionForm>
       </article>
+
+      <ApprovalPanel project={project} approvals={approvals} />
 
       <article className="card">
         <div className="section-head">

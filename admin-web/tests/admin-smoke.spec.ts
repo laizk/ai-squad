@@ -206,4 +206,44 @@ test("admin web smoke flow covers project, team member, assignment, and revision
 
   await expect(page.getByText(/project_assignment/i).first()).toBeVisible();
   await expect(page.locator(".timeline-diff-row").filter({ hasText: "Enabled" }).first()).toBeVisible();
+
+  // ── Approval panel: submit a decision and verify it renders ──────────
+  const approvalPanel = page.locator("article.card").filter({ hasText: "Approval decisions" }).first();
+  await expect(approvalPanel.getByRole("heading", { name: /Record decision/i })).toBeVisible();
+
+  await approvalPanel.locator('select[name="status"]').selectOption("approved");
+  await approvalPanel
+    .locator('textarea[name="comment"]')
+    .fill("Reviewed the full smoke flow — scope is sound and milestones are well-defined.");
+  await approvalPanel.locator('select[name="evidence_type"]').selectOption("other");
+  await approvalPanel
+    .locator('textarea[name="evidence_description"]')
+    .fill("Manual review of revision history confirmed all changes are correctly captured.");
+  await approvalPanel.getByRole("button", { name: "Submit decision" }).click();
+  await expect(approvalPanel.getByText("Decision recorded.")).toBeVisible();
+
+  // Approval item should now be visible
+  await expect(approvalPanel.locator(".approval-item").first()).toBeVisible();
+  await expect(approvalPanel.locator(".status-chip.status-approved").first()).toBeVisible();
+
+  // ── Stale badge: bump the project version via API then reload ────────
+  const api = await playwrightRequest.newContext({
+    baseURL: apiBaseURL,
+    extraHTTPHeaders: { "Content-Type": "application/json" }
+  });
+  try {
+    await api.patch(`/api/v1/projects/${cleanupState.projectId}`, {
+      data: {
+        name: `${projectName} (edited)`,
+        reason: buildReason(
+          "Bumping project version via API to verify stale-approval badge renders in admin-web after a later edit."
+        )
+      }
+    });
+  } finally {
+    await api.dispose();
+  }
+
+  await page.reload();
+  await expect(approvalPanel.locator(".stale-badge").first()).toBeVisible();
 });

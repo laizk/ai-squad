@@ -247,3 +247,46 @@ export type RevisionListResponse = {
   entity_id: string;
   revisions: Revision[];
 };
+
+export type EvidenceType =
+  | "artifact"
+  | "test_result"
+  | "screenshot"
+  | "log"
+  | "github_link"
+  | "other";
+
+export type ApprovalStatus = "approved" | "rejected" | "changes_requested";
+
+export type ApprovalEvidence = {
+  id: string;
+  approval_id: string;
+  evidence_type: EvidenceType;
+  artifact_id: string | null;
+  external_url: string | null;
+  description: string;
+  created_at: string;
+};
+
+export type Approval = {
+  id: string;
+  entity_type: RevisionEntityType;
+  entity_id: string;
+  approved_revision_number: number;
+  status: ApprovalStatus;
+  comment: string;
+  override_used: boolean;
+  override_reason: string | null;
+  is_stale: boolean;
+  stale_at: string | null;
+  decided_by: string;
+  decided_at: string;
+  created_at: string;
+  updated_at: string;
+  evidence: ApprovalEvidence[];
+};
+
+export type ApprovalListResponse = {
+  total: number;
+  items: Approval[];
+};
