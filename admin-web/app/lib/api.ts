@@ -148,6 +148,51 @@ export type Revision = {
   created_at: string;
 };
 
+export type TeamMemberRole = "pm" | "ux" | "dev-jr" | "dev-sr" | "qa" | "devops" | "judge" | "custom";
+
+export type ProviderType = "ollama" | "anthropic" | "openai" | "custom";
+
+export type TeamMember = {
+  id: string;
+  name: string;
+  role: TeamMemberRole;
+  display_name: string;
+  description: string | null;
+  skills: string[];
+  provider: ProviderType;
+  model: string;
+  is_active: boolean;
+  current_version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TeamMemberListResponse = {
+  total: number;
+  page: number;
+  per_page: number;
+  items: TeamMember[];
+};
+
+export type ProjectAssignment = {
+  id: string;
+  project_id: string;
+  team_member_id: string;
+  is_enabled: boolean;
+  provider_override: ProviderType | null;
+  model_override: string | null;
+  disabled_at: string | null;
+  disable_reason: string | null;
+  current_version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAssignmentListResponse = {
+  total: number;
+  items: ProjectAssignment[];
+};
+
 export type RevisionListResponse = {
   entity_type: RevisionEntityType;
   entity_id: string;

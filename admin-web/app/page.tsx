@@ -46,6 +46,13 @@ export default async function HomePage() {
           The admin web now reads the live control API and exposes the first reviewable planning surface:
           projects, milestones, and tasks with append-only revisions behind them.
         </p>
+
+        <div className="hero-meta">
+          <span>Phase {phase}</span>
+          <Link href="/team-members" className="text-link">
+            Manage team members
+          </Link>
+        </div>
       </section>
 
       <section className="grid grid-wide">

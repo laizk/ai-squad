@@ -8,11 +8,15 @@ import {
   type Milestone,
   type MilestoneListResponse,
   type Project,
+  type ProjectAssignment,
+  type ProjectAssignmentListResponse,
   type Revision,
   type RevisionEntityType,
   type RevisionListResponse,
   type Task,
-  type TaskListResponse
+  type TaskListResponse,
+  type TeamMember,
+  type TeamMemberListResponse
 } from "../../lib/api";
 
 type TimelineEntry = {
@@ -61,12 +65,16 @@ async function fetchProject(projectId: string) {
     const tasksByMilestoneMap = Object.fromEntries(tasksByMilestone) as Record<string, Task[]>;
 
     const timeline = await fetchTimeline(project, milestones.items, tasksByMilestoneMap);
+    const assignments = await apiRequest<ProjectAssignmentListResponse>(`/api/v1/projects/${projectId}/team`);
+    const teamMembers = await apiRequest<TeamMemberListResponse>("/api/v1/team-members");
 
     return {
       project,
       milestones: milestones.items,
       tasksByMilestone: tasksByMilestoneMap,
-      timeline
+      timeline,
+      assignments: assignments.items,
+      teamMembers: teamMembers.items
     };
   } catch (error) {
     if (error instanceof Error && error.message === "Project not found") {
@@ -354,6 +362,154 @@ function TaskCard({ projectId, task }: { projectId: string; task: Task }) {
   );
 }
 
+function TeamAssignmentCard({
+  projectId,
+  assignments,
+  teamMembers
+}: {
+  projectId: string;
+  assignments: ProjectAssignment[];
+  teamMembers: TeamMember[];
+}) {
+  const activeAssignments = assignments.filter((assignment) => assignment.is_enabled);
+  const assignedMemberIds = new Set(assignments.map((assignment) => assignment.team_member_id));
+  const assignableMembers = teamMembers.filter(
+    (member) => member.is_active && !assignedMemberIds.has(member.id)
+  );
+
+  const getMemberName = (memberId: string) => {
+    const member = teamMembers.find((m) => m.id === memberId);
+    return member ? member.display_name : "Unknown member";
+  };
+
+  const getMemberRole = (memberId: string) => {
+    const member = teamMembers.find((m) => m.id === memberId);
+    return member ? member.role : "unknown";
+  };
+
+  return (
+    <article className="card">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Team</p>
+          <h2>Assigned team members</h2>
+        </div>
+        <p className="meta">{activeAssignments.length} active · {assignments.length} total</p>
+      </div>
+
+      {assignments.length === 0 ? (
+        <p className="empty-state">No team members assigned yet.</p>
+      ) : (
+        <ul className="assignment-list">
+          {assignments.map((assignment) => {
+            return (
+              <li key={assignment.id} className="assignment-item">
+                <div className="assignment-head">
+                  <div>
+                    <strong>
+                      <Link href={`/team-members/${assignment.team_member_id}`} className="text-link">
+                        {getMemberName(assignment.team_member_id)}
+                      </Link>
+                    </strong>
+                    <span className="assignment-role">
+                      ({getMemberRole(assignment.team_member_id)})
+                    </span>
+                  </div>
+                  <div className="assignment-meta">
+                    <span className={`status-chip ${assignment.is_enabled ? "status-active" : "status-archived"}`}>
+                      {assignment.is_enabled ? "enabled" : "disabled"}
+                    </span>
+                    {assignment.provider_override && (
+                      <span className="assignment-provider">
+                        {assignment.provider_override}
+                      </span>
+                    )}
+                    {assignment.model_override && (
+                      <span className="assignment-model">
+                        {assignment.model_override}
+                      </span>
+                    )}
+                    <span className="assignment-version">v{assignment.current_version}</span>
+                  </div>
+                </div>
+                {assignment.disable_reason && (
+                  <p className="assignment-disabled">
+                    Disabled: {assignment.disable_reason}
+                  </p>
+                )}
+                <form action={toggleAssignmentAction} className="inline-form">
+                  <input type="hidden" name="project_id" value={projectId} />
+                  <input type="hidden" name="team_member_id" value={assignment.team_member_id} />
+                  <input type="hidden" name="is_enabled" value={assignment.is_enabled ? "false" : "true"} />
+                  <button type="submit" className="button-secondary btn-sm">
+                    {assignment.is_enabled ? "Disable assignment" : "Re-enable assignment"}
+                  </button>
+                </form>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <form action={assignTeamMemberAction} className="form-stack form-slab">
+        <input type="hidden" name="project_id" value={projectId} />
+        <div className="section-head tight">
+          <div>
+            <p className="eyebrow">Assign</p>
+            <h3>Add member</h3>
+          </div>
+        </div>
+
+        {assignableMembers.length === 0 ? (
+          <p className="empty-state">All active team members are already assigned to this project.</p>
+        ) : (
+          <>
+            <label className="field">
+              <span>Team member</span>
+              <select name="team_member_id" required defaultValue="">
+                <option value="" disabled>
+                  Select a team member
+                </option>
+                {assignableMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.display_name} ({member.role})
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="form-grid">
+              <label className="field">
+                <span>Model override</span>
+                <input
+                  type="text"
+                  name="model_override"
+                  placeholder="Leave blank to use the team member default"
+                />
+              </label>
+
+              <label className="field">
+                <span>Provider override</span>
+                <select name="provider_override" defaultValue="">
+                  <option value="">Use team member default</option>
+                  <option value="ollama">ollama</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="openai">openai</option>
+                  <option value="custom">custom</option>
+                </select>
+              </label>
+            </div>
+
+            <button type="submit" className="button-primary">
+              Assign to project
+            </button>
+          </>
+        )}
+      </form>
+    </article>
+  );
+}
+
 function MilestoneCard({
   projectId,
   milestone,
@@ -484,12 +640,72 @@ function MilestoneCard({
   );
 }
 
+async function assignTeamMemberAction(formData: FormData) {
+  "use server";
+
+  const projectId = String(formData.get("project_id") ?? "");
+  const teamMemberId = String(formData.get("team_member_id") ?? "");
+  const modelOverride = String(formData.get("model_override") ?? "").trim() || null;
+  const providerOverride = String(formData.get("provider_override") ?? "").trim() || null;
+
+  if (!projectId || !teamMemberId) {
+    throw new Error("Project and team member are required");
+  }
+
+  await apiRequest(`/api/v1/projects/${projectId}/team`, {
+    method: "POST",
+    body: {
+      team_member_id: teamMemberId,
+      model_override: modelOverride,
+      provider_override: providerOverride,
+      reason: buildReason(
+        "initial_creation",
+        "Assigning a team member to the project so they can begin work on defined tasks and milestones."
+      )
+    }
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+}
+
+async function toggleAssignmentAction(formData: FormData) {
+  "use server";
+
+  const projectId = String(formData.get("project_id") ?? "");
+  const teamMemberId = String(formData.get("team_member_id") ?? "");
+  const isEnabled = String(formData.get("is_enabled") ?? "") === "true";
+
+  if (!projectId || !teamMemberId) {
+    throw new Error("Project and team member are required");
+  }
+
+  await apiRequest(`/api/v1/projects/${projectId}/team/${teamMemberId}`, {
+    method: isEnabled ? "PATCH" : "DELETE",
+    body: {
+      ...(isEnabled
+        ? {
+            is_enabled: true,
+            disable_reason: null
+          }
+        : {}),
+      reason: buildReason(
+        "scope_change",
+        isEnabled
+          ? "Re-enabling a project assignment so this team member can resume work under the current project plan."
+          : "Disabling a project assignment so the current staffing plan matches the project scope."
+      )
+    }
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+}
+
 export default async function ProjectDetailPage({
   params
 }: {
   params: { projectId: string };
 }) {
-  const { project, milestones, tasksByMilestone, timeline } = await fetchProject(params.projectId);
+  const { project, milestones, tasksByMilestone, timeline, assignments, teamMembers } = await fetchProject(params.projectId);
 
   return (
     <main className="shell page-stack">
@@ -513,6 +729,12 @@ export default async function ProjectDetailPage({
       </section>
 
       <section className="grid grid-wide">
+        <TeamAssignmentCard
+          projectId={project.id}
+          assignments={assignments}
+          teamMembers={teamMembers}
+        />
+
         <article className="card">
           <div className="section-head">
             <div>
@@ -534,52 +756,52 @@ export default async function ProjectDetailPage({
             ))}
           </div>
         </article>
-
-        <article className="card">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">Create</p>
-              <h2>Add milestone</h2>
-            </div>
-          </div>
-
-          <form action={createMilestoneAction} className="form-stack">
-            <input type="hidden" name="project_id" value={project.id} />
-
-            <label className="field">
-              <span>Title</span>
-              <input name="title" type="text" placeholder="Planning approved" required />
-            </label>
-
-            <label className="field">
-              <span>Description</span>
-              <textarea
-                name="description"
-                rows={4}
-                placeholder="What should this milestone prove or deliver?"
-              />
-            </label>
-
-            <label className="field">
-              <span>Due date</span>
-              <input name="due_date" type="date" />
-            </label>
-
-            <label className="field">
-              <span>Acceptance criteria</span>
-              <textarea
-                name="acceptance_criteria"
-                rows={5}
-                placeholder={"One criterion per line\nVisible in the review UI\nBacked by revision history"}
-              />
-            </label>
-
-            <button type="submit" className="button-primary">
-              Add milestone
-            </button>
-          </form>
-        </article>
       </section>
+
+      <article className="card">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Create</p>
+            <h2>Add milestone</h2>
+          </div>
+        </div>
+
+        <form action={createMilestoneAction} className="form-stack">
+          <input type="hidden" name="project_id" value={project.id} />
+
+          <label className="field">
+            <span>Title</span>
+            <input name="title" type="text" placeholder="Planning approved" required />
+          </label>
+
+          <label className="field">
+            <span>Description</span>
+            <textarea
+              name="description"
+              rows={4}
+              placeholder="What should this milestone prove or deliver?"
+            />
+          </label>
+
+          <label className="field">
+            <span>Due date</span>
+            <input name="due_date" type="date" />
+          </label>
+
+          <label className="field">
+            <span>Acceptance criteria</span>
+            <textarea
+              name="acceptance_criteria"
+              rows={5}
+              placeholder={"One criterion per line\nVisible in the review UI\nBacked by revision history"}
+            />
+          </label>
+
+          <button type="submit" className="button-primary">
+            Add milestone
+          </button>
+        </form>
+      </article>
 
       <article className="card">
         <div className="section-head">
