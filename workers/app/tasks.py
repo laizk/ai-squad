@@ -15,7 +15,7 @@ from uuid import UUID
 
 import asyncpg
 
-from app.agents import dev_agent, pm_agent
+from app.agents import dev_agent, pm_agent, reviewer_agent
 from app.celery_app import app
 from app.stubs import reviewer_stub
 
@@ -29,8 +29,8 @@ DATABASE_URL = os.environ.get(
 # Map role → agent/stub module
 STUB_REGISTRY = {
     "pm":     pm_agent,      # real model-backed PM agent (P4)
-    "dev-jr": dev_agent,     # real model-backed dev agent (P5)
-    "dev-sr": reviewer_stub,
+    "dev-jr": dev_agent,       # real model-backed dev agent (P5)
+    "dev-sr": reviewer_agent,  # real model-backed reviewer (P5)
     "qa":     reviewer_stub,
     "judge":  reviewer_stub,
 }

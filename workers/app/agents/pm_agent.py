@@ -226,6 +226,29 @@ def _call_ollama(base_url: str, user_message: str) -> str:
         raise RuntimeError(f"Ollama call failed: {exc}") from exc
 
 
+def _extract_response_content(body: dict) -> str:
+    """Extract text content from an OpenAI-compat response.
+
+    Qwen3 thinking models emit reasoning in <think>…</think> blocks.
+    llama-server may return them inside `content` or strip them and put
+    the reasoning in `reasoning_content` leaving `content` empty.
+    Either way, strip think blocks and fall back to reasoning_content
+    so callers always get the clean model output.
+    """
+    msg = body["choices"][0]["message"]
+    content = msg.get("content") or ""
+    # Strip <think>…</think> blocks (may span multiple lines)
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    if content:
+        return content
+    # Fall back: some server versions surface text only in reasoning_content
+    reasoning = msg.get("reasoning_content") or ""
+    if reasoning:
+        logger.debug("content was empty — extracting JSON from reasoning_content")
+        return reasoning.strip()
+    return content  # empty — let caller raise
+
+
 def _call_openai_compat(base_url: str, user_message: str) -> str:
     payload = {
         "model": PM_MODEL,
@@ -250,7 +273,7 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
         )
         response.raise_for_status()
         body = response.json()
-        return body["choices"][0]["message"]["content"]
+        return _extract_response_content(body)
     except httpx.HTTPStatusError as exc:
         response_text = ""
         try:
@@ -289,16 +312,30 @@ def _local_model_call_lock(provider: str):
 
 
 def _parse_json(raw: str) -> dict:
-    """Parse JSON from the model response, tolerating minor preamble."""
+    """Parse JSON from the model response, tolerating preamble and trailing content.
+
+    Strategy: scan every '{' position and keep the parse that extends furthest
+    into the string. This handles models that prefix with text, thinking tokens
+    that weren't fully stripped, or multiple JSON chunks in the output.
+    """
     raw = raw.strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-    # try to extract a JSON object in case the model added surrounding text
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        return json.loads(match.group())
+    decoder = json.JSONDecoder()
+    best: tuple[dict, int] | None = None
+    for i, ch in enumerate(raw):
+        if ch != "{":
+            continue
+        try:
+            obj, end = decoder.raw_decode(raw, i)
+            if isinstance(obj, dict) and (best is None or end > best[1]):
+                best = (obj, end)
+        except json.JSONDecodeError:
+            pass
+    if best:
+        return best[0]
     raise RuntimeError(
         f"PM model did not return valid JSON. First 500 chars: {raw[:500]}"
     )

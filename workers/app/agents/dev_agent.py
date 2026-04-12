@@ -23,7 +23,9 @@ from app.agents.pm_agent import (
     OPENAI_COMPAT_PROVIDERS,
     OLLAMA_URL,
     PM_API_KEY,
+    _extract_response_content,
     _local_model_call_lock,
+    _parse_json,
     _resolve_base_url,
 )
 
@@ -219,7 +221,7 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
             timeout=PM_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        return _extract_response_content(response.json())
     except httpx.HTTPStatusError as exc:
         body = ""
         try:
@@ -238,18 +240,6 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
         raise RuntimeError(f"Dev agent model call failed: {exc}") from exc
 
 
-def _parse_json(raw: str) -> dict:
-    raw = raw.strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        return json.loads(match.group())
-    raise RuntimeError(
-        f"Dev agent model did not return valid JSON. First 500 chars: {raw[:500]}"
-    )
 
 
 def _push_to_github(
