@@ -59,6 +59,9 @@ export default async function HomePage() {
           <Link href="/team-members" className="text-link">
             Manage team members
           </Link>
+          <Link href="/runs" className="text-link">
+            Workflow runs
+          </Link>
           <Link href="/system" className="text-link">
             View system health
           </Link>

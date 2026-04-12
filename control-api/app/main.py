@@ -8,9 +8,11 @@ from app.config import settings
 from app.db import ensure_database_ready
 from app.health import check_postgres, check_redis
 from app.routers.approvals import router as approvals_router
+from app.routers.artifacts import router as artifacts_router
 from app.routers.planning import router as planning_router
 from app.routers.projects import router as projects_router
 from app.routers.revisions import router as revisions_router
+from app.routers.runs import router as runs_router
 from app.routers.team_members import router as team_members_router
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,8 @@ app.include_router(planning_router)
 app.include_router(revisions_router)
 app.include_router(team_members_router)
 app.include_router(approvals_router)
+app.include_router(runs_router)
+app.include_router(artifacts_router)
 
 
 @app.get("/")

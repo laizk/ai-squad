@@ -290,3 +290,72 @@ export type ApprovalListResponse = {
   total: number;
   items: Approval[];
 };
+
+export type RunStatus = "created" | "running" | "paused" | "completed" | "failed" | "cancelled";
+
+export type RunStepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+
+export type RunStep = {
+  id: string;
+  run_id: string;
+  role: string;
+  step_order: number;
+  status: RunStepStatus;
+  pause_after: boolean;
+  output_artifact_id: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+};
+
+export type Run = {
+  id: string;
+  project_id: string;
+  task_id: string | null;
+  status: RunStatus;
+  workflow_type: string;
+  trigger_actor: string;
+  idempotency_key: string;
+  steps: RunStep[];
+  started_at: string | null;
+  paused_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+};
+
+export type RunListResponse = {
+  total: number;
+  items: Run[];
+};
+
+export type ArtifactType =
+  | "spec" | "milestone_plan" | "tasks" | "acceptance_criteria"
+  | "ui_notes" | "component_map" | "ux_risks"
+  | "implementation_summary" | "code_diff"
+  | "review_findings" | "refactor_summary"
+  | "test_plan" | "test_results" | "bug_list"
+  | "docker_changes" | "ci_changes" | "runbook"
+  | "rubric_score" | "recommendation" | "other";
+
+export type Artifact = {
+  id: string;
+  project_id: string;
+  run_id: string | null;
+  run_step_id: string | null;
+  role: string | null;
+  artifact_type: ArtifactType;
+  name: string;
+  version: number;
+  is_current: boolean;
+  created_at: string;
+};
+
+export type ArtifactContent = {
+  id: string;
+  artifact_type: ArtifactType;
+  name: string;
+  body: string;
+  created_at: string;
+};

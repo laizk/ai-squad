@@ -1,6 +1,5 @@
-# AI Squad — Phase P-1 scaffold
-# This compose file intentionally brings up only the minimum stack:
-# postgres, redis, control-api, and admin-web.
+# AI Squad — Phase P3
+# Stack: postgres, redis, control-api, admin-web, workers.
 
 services:
   postgres:
@@ -52,7 +51,7 @@ services:
       APP_NAME: AI Squad Control API
       APP_VERSION: 0.2.0-foundation
       APP_ENV: development
-      APP_PHASE: P0
+      APP_PHASE: P3
       HEALTH_TIMEOUT_SECONDS: 2.0
       DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
       MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-squad}:${POSTGRES_PASSWORD:-changeme-local}@postgres:5432/${POSTGRES_DB:-squad}
@@ -79,7 +78,7 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
         INTERNAL_API_URL: ${INTERNAL_API_URL:-http://control-api:8000}
-        NEXT_PUBLIC_APP_PHASE: P0
+        NEXT_PUBLIC_APP_PHASE: P3
     container_name: squad-admin-web
     restart: unless-stopped
     depends_on:
@@ -88,10 +87,27 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
       INTERNAL_API_URL: ${INTERNAL_API_URL:-http://control-api:8000}
-      NEXT_PUBLIC_APP_PHASE: P0
+      NEXT_PUBLIC_APP_PHASE: P3
       NODE_ENV: production
     ports:
       - "3000:3000"
+
+  workers:
+    build:
+      context: ../workers
+      dockerfile: Dockerfile
+    container_name: squad-workers
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      control-api:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      WORKER_DATABASE_URL: postgresql://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
 
 volumes:
   postgres_data:

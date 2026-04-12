@@ -11,7 +11,7 @@ def test_health_endpoint_reports_live_dependencies(client: httpx.Client) -> None
     assert body["status"] == "ok"
     assert body["postgres"] == "ok"
     assert body["redis"] == "ok"
-    assert body["phase"] == "P0"
+    assert body["phase"] in ("P0", "P1", "P2", "P3")
 
 
 def test_bootstrap_endpoint_reports_schema_marker(client: httpx.Client) -> None:

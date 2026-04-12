@@ -393,3 +393,132 @@ class TaskResponse(BaseModel):
 class TaskListResponse(BaseModel):
     total: int
     items: list[TaskResponse]
+
+
+# ── Runs ──────────────────────────────────────────────────────
+
+class RunStatus(str, Enum):
+    created = "created"
+    running = "running"
+    paused = "paused"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class RunStepStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    skipped = "skipped"
+
+
+class ArtifactType(str, Enum):
+    spec = "spec"
+    milestone_plan = "milestone_plan"
+    tasks = "tasks"
+    acceptance_criteria = "acceptance_criteria"
+    ui_notes = "ui_notes"
+    component_map = "component_map"
+    ux_risks = "ux_risks"
+    implementation_summary = "implementation_summary"
+    code_diff = "code_diff"
+    review_findings = "review_findings"
+    refactor_summary = "refactor_summary"
+    test_plan = "test_plan"
+    test_results = "test_results"
+    bug_list = "bug_list"
+    docker_changes = "docker_changes"
+    ci_changes = "ci_changes"
+    runbook = "runbook"
+    rubric_score = "rubric_score"
+    recommendation = "recommendation"
+    other = "other"
+
+
+WORKFLOW_STEPS: dict[str, list[tuple[str, bool]]] = {
+    # (role, pause_after)
+    "pm_planning":      [("pm", True)],
+    "dev_cycle":        [("dev-jr", False), ("dev-sr", False)],
+    "full_sequential":  [
+        ("pm",     True),
+        ("dev-jr", False),
+        ("dev-sr", False),
+        ("qa",     False),
+        ("judge",  False),
+    ],
+}
+
+OPTIONAL_ROLES_SKIPPED = ["ux", "devops"]
+
+
+class RunCreate(BaseModel):
+    project_id: UUID
+    task_id: UUID | None = None
+    workflow_type: str = Field(default="pm_planning", min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_workflow_type(self) -> "RunCreate":
+        if self.workflow_type not in WORKFLOW_STEPS:
+            raise ValueError(
+                f"workflow_type must be one of: {', '.join(WORKFLOW_STEPS.keys())}"
+            )
+        return self
+
+
+class RunStepResponse(BaseModel):
+    id: UUID
+    run_id: UUID
+    role: str
+    step_order: int
+    status: RunStepStatus
+    pause_after: bool
+    output_artifact_id: UUID | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_message: str | None
+    created_at: datetime
+
+
+class RunResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    task_id: UUID | None
+    status: RunStatus
+    workflow_type: str
+    trigger_actor: str
+    idempotency_key: str
+    steps: list[RunStepResponse]
+    started_at: datetime | None
+    paused_at: datetime | None
+    completed_at: datetime | None
+    error_message: str | None
+    created_at: datetime
+
+
+class RunListResponse(BaseModel):
+    total: int
+    items: list[RunResponse]
+
+
+class ArtifactResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    run_id: UUID | None
+    run_step_id: UUID | None
+    role: str | None
+    artifact_type: ArtifactType
+    name: str
+    version: int
+    is_current: bool
+    created_at: datetime
+
+
+class ArtifactContentResponse(BaseModel):
+    id: UUID
+    artifact_type: ArtifactType
+    name: str
+    body: str
+    created_at: datetime
