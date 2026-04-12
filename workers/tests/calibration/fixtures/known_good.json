@@ -1,0 +1,8 @@
+{
+  "label": "known_good",
+  "brief": "Build a Python function that reverses a string. Include a pytest test that checks the function against at least three inputs including an empty string.",
+  "tasks": "[{\"id\": 1, \"role\": \"dev-jr\", \"title\": \"Implement reverse_string\", \"description\": \"Write reverse_string(s) that returns s reversed.\", \"priority\": \"high\", \"acceptance_criteria\": \"Handles empty string, single char, and multi-char inputs.\"}, {\"id\": 2, \"role\": \"dev-jr\", \"title\": \"Write pytest tests\", \"description\": \"Cover empty string, single char, and multi-char cases.\", \"priority\": \"high\", \"acceptance_criteria\": \"At least 3 passing assertions.\"}]",
+  "dev_output": "{\"files\": [{\"path\": \"reverse_string.py\", \"content\": \"def reverse_string(s):\\n    return s[::-1]\\n\"}, {\"path\": \"test_reverse_string.py\", \"content\": \"from reverse_string import reverse_string\\n\\ndef test_empty():\\n    assert reverse_string('') == ''\\n\\ndef test_single_char():\\n    assert reverse_string('a') == 'a'\\n\\ndef test_multi_char():\\n    assert reverse_string('hello') == 'olleh'\\n\"}]}",
+  "review_findings": "{\"outcome\": \"approved\", \"comments\": \"Implementation is clean and correct. All acceptance criteria met. Tests are comprehensive and cover edge cases.\", \"issues\": []}",
+  "test_results": "{\"status\": \"passed\", \"summary\": \"Executed pytest against 1 test file(s). exit_code=0, duration_seconds=0.3.\", \"files_checked\": [\"reverse_string.py\", \"test_reverse_string.py\"], \"sandbox\": {\"exit_code\": 0, \"duration_seconds\": 0.3, \"stdout\": \"3 passed in 0.28s\", \"stderr\": \"\"}}"
+}

@@ -1,0 +1,8 @@
+{
+  "label": "known_bad",
+  "brief": "Build a Python function that reverses a string. Include a pytest test that checks the function against at least three inputs including an empty string.",
+  "tasks": "[{\"id\": 1, \"role\": \"dev-jr\", \"title\": \"Implement reverse_string\", \"description\": \"Write reverse_string(s) that returns s reversed.\", \"priority\": \"high\", \"acceptance_criteria\": \"Handles empty string, single char, and multi-char inputs.\"}, {\"id\": 2, \"role\": \"dev-jr\", \"title\": \"Write pytest tests\", \"description\": \"Cover empty string, single char, and multi-char cases.\", \"priority\": \"high\", \"acceptance_criteria\": \"At least 3 passing assertions.\"}]",
+  "dev_output": "{\"files\": [{\"path\": \"reverse_string.py\", \"content\": \"def reverse_string(s):\\n    return s  # TODO: implement\\n\"}, {\"path\": \"test_reverse_string.py\", \"content\": \"from reverse_string import reverse_string\\n\\ndef test_placeholder():\\n    pass\\n\"}]}",
+  "review_findings": "{\"outcome\": \"changes_requested\", \"comments\": \"Function is not implemented — it returns the input unchanged. Tests are empty stubs with no assertions. No acceptance criteria are met.\", \"issues\": [\"reverse_string always returns input unchanged\", \"test file has no assertions\", \"empty string and multi-char cases not covered\"]}",
+  "test_results": "{\"status\": \"failed\", \"summary\": \"Executed pytest against 1 test file(s). exit_code=1, duration_seconds=0.4.\", \"files_checked\": [\"reverse_string.py\", \"test_reverse_string.py\"], \"sandbox\": {\"exit_code\": 1, \"duration_seconds\": 0.4, \"stdout\": \"\", \"stderr\": \"FAILED test_reverse_string.py::test_placeholder - AssertionError: not implemented\"}}"
+}
