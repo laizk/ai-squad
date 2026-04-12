@@ -110,8 +110,12 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       WORKER_DATABASE_URL: postgresql://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
+      PM_LLM_PROVIDER: ${PM_LLM_PROVIDER:-llama_cpp}
+      PM_BASE_URL: ${PM_BASE_URL:-http://host.docker.internal:8080/v1}
+      PM_API_KEY: ${PM_API_KEY:-}
+      PM_REQUEST_TIMEOUT_SECONDS: ${PM_REQUEST_TIMEOUT_SECONDS:-600}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
-      PM_MODEL: ${PM_MODEL:-qwen2.5-coder:7b}
+      PM_MODEL: ${PM_MODEL:-qwen3.5-35b-a3b-q4}
       GITHUB_SVC_URL: http://github-svc:9000
 
   github-svc:

@@ -1,4 +1,4 @@
-"""Real PM agent — Ollama-backed planning step.
+"""Real PM agent — local model-server-backed planning step.
 
 Replaces the PM stub with a model call that produces:
 - spec artifact:        brief_summary, milestones, rationale
@@ -10,6 +10,8 @@ unavailable or unconfigured the agent continues without issues.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -20,9 +22,30 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+PM_LLM_PROVIDER = os.environ.get("PM_LLM_PROVIDER", "lmstudio").strip().lower()
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
+PM_BASE_URL = os.environ.get("PM_BASE_URL", "").strip()
+PM_API_KEY = os.environ.get("PM_API_KEY", "").strip()
 PM_MODEL = os.environ.get("PM_MODEL", "qwen2.5-coder:7b")
+PM_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("PM_REQUEST_TIMEOUT_SECONDS", "600"))
+PM_SERIALIZE_LOCAL_CALLS = os.environ.get("PM_SERIALIZE_LOCAL_CALLS", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
+PM_LOCAL_CALL_LOCK_PATH = os.environ.get(
+    "PM_LOCAL_CALL_LOCK_PATH",
+    "/tmp/ai-squad-pm-llm.lock",
+)
 GITHUB_SVC_URL = os.environ.get("GITHUB_SVC_URL", "http://github-svc:9000")
+
+OPENAI_COMPAT_PROVIDERS = {"lmstudio", "mlx_lm", "llama_cpp", "openai_compat"}
+PROVIDER_BASE_URLS = {
+    "lmstudio": "http://host.docker.internal:1234/v1",
+    "mlx_lm": "http://host.docker.internal:8080/v1",
+    "llama_cpp": "http://host.docker.internal:8080/v1",
+    "openai_compat": "http://host.docker.internal:1234/v1",
+}
 
 # ── Output contract ────────────────────────────────────────────────────────────
 
@@ -60,7 +83,7 @@ Produce specific, actionable content. Do not use placeholder text."""
 
 
 def run(context: dict) -> list[dict]:
-    """Call Ollama and return the three PM artifacts."""
+    """Call the configured model server and return the three PM artifacts."""
     project_id = context.get("project_id", "unknown")
     run_id = context.get("run_id")
     brief = context.get("brief", "No brief provided.")
@@ -69,30 +92,7 @@ def run(context: dict) -> list[dict]:
         f"Project ID: {project_id}\n\n"
         f"Project brief:\n{brief}"
     )
-
-    payload = {
-        "model": PM_MODEL,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        "format": "json",
-        "options": {"temperature": 0.3},
-    }
-
-    logger.info("PM agent calling Ollama model=%s url=%s", PM_MODEL, OLLAMA_URL)
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_URL}/api/chat",
-            json=payload,
-            timeout=600.0,
-        )
-        resp.raise_for_status()
-    except Exception as exc:
-        raise RuntimeError(f"Ollama call failed: {exc}") from exc
-
-    raw = resp.json()["message"]["content"]
+    raw = _call_model(user_message)
     data = _parse_json(raw)
 
     failures = _sanity_check(data)
@@ -166,6 +166,126 @@ def validate(artifact_type: str, body: str) -> bool:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _resolve_base_url() -> str:
+    if PM_BASE_URL:
+        return PM_BASE_URL.rstrip("/")
+
+    if PM_LLM_PROVIDER == "ollama":
+        return OLLAMA_URL.rstrip("/")
+
+    return PROVIDER_BASE_URLS.get(PM_LLM_PROVIDER, PROVIDER_BASE_URLS["lmstudio"])
+
+
+def _call_model(user_message: str) -> str:
+    provider = PM_LLM_PROVIDER
+    base_url = _resolve_base_url()
+
+    logger.info(
+        "PM agent calling provider=%s model=%s base_url=%s",
+        provider,
+        PM_MODEL,
+        base_url,
+    )
+
+    with _local_model_call_lock(provider):
+        if provider == "ollama":
+            return _call_ollama(base_url, user_message)
+
+        if provider in OPENAI_COMPAT_PROVIDERS:
+            return _call_openai_compat(base_url, user_message)
+
+    raise RuntimeError(
+        "Unsupported PM_LLM_PROVIDER. Expected one of: "
+        "ollama, lmstudio, mlx_lm, llama_cpp, openai_compat"
+    )
+
+
+def _call_ollama(base_url: str, user_message: str) -> str:
+    payload = {
+        "model": PM_MODEL,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        "format": "json",
+        "options": {"temperature": 0.3},
+    }
+
+    try:
+        response = httpx.post(
+            f"{base_url}/api/chat",
+            json=payload,
+            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json()["message"]["content"]
+    except Exception as exc:
+        raise RuntimeError(f"Ollama call failed: {exc}") from exc
+
+
+def _call_openai_compat(base_url: str, user_message: str) -> str:
+    payload = {
+        "model": PM_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": 0.3,
+        "stream": False,
+    }
+
+    headers = {"Content-Type": "application/json"}
+    if PM_API_KEY:
+        headers["Authorization"] = f"Bearer {PM_API_KEY}"
+
+    try:
+        response = httpx.post(
+            f"{base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        body = response.json()
+        return body["choices"][0]["message"]["content"]
+    except httpx.HTTPStatusError as exc:
+        response_text = ""
+        try:
+            response_text = exc.response.text
+        except Exception:
+            response_text = "<unavailable>"
+        logger.error(
+            "OpenAI-compatible model call failed with status=%s body=%s",
+            exc.response.status_code,
+            response_text[:2000],
+        )
+        raise RuntimeError(
+            "OpenAI-compatible model call failed: "
+            f"{exc}; response body: {response_text[:500]}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(f"OpenAI-compatible model call failed: {exc}") from exc
+
+
+@contextlib.contextmanager
+def _local_model_call_lock(provider: str):
+    if not PM_SERIALIZE_LOCAL_CALLS or provider == "openai_compat":
+        yield
+        return
+
+    lock_path = PM_LOCAL_CALL_LOCK_PATH
+    logger.info("Waiting for local model lock at %s", lock_path)
+    with open(lock_path, "w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        logger.info("Acquired local model lock at %s", lock_path)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            logger.info("Released local model lock at %s", lock_path)
 
 
 def _parse_json(raw: str) -> dict:

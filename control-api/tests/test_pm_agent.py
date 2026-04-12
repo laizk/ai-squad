@@ -1,14 +1,14 @@
 """P4 integration tests — real PM agent run.
 
 These tests create a pm_planning run and wait for the workers to complete it
-(with the real Ollama-backed PM agent). They verify:
+(with the real PM agent backed by the configured local model server). They verify:
 - all three artifacts are produced (spec, tasks, decision_log)
 - artifacts pass content sanity checks
 - the spec has a substantive brief_summary and rationale
 - the tasks artifact has at least 3 tasks with acceptance criteria
 - the decision_log artifact contains at least one decision entry
 
-These tests are slower than unit tests (Ollama call can take 10–60s).
+These tests are slower than unit tests (local model inference can take 10–120s).
 They are skipped if the PM agent does not complete within the timeout.
 """
 from __future__ import annotations
@@ -69,7 +69,7 @@ class TestRealPMAgent:
         run = _wait_for_paused(client, run_id)
 
         if run is None:
-            pytest.skip(f"Run did not complete within {POLL_TIMEOUT}s — Ollama may be slow or offline")
+            pytest.skip(f"Run did not complete within {POLL_TIMEOUT}s — model server may be slow or offline")
         if run["status"] == "failed":
             pytest.fail(f"PM agent run failed: {run.get('error_message')}")
 
