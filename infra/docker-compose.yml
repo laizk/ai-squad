@@ -5,6 +5,8 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: squad-postgres
+    env_file:
+      - ../.env
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-squad}
@@ -24,6 +26,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: squad-redis
+    env_file:
+      - ../.env
     restart: unless-stopped
     command: redis-server --save 60 1
     ports:
@@ -41,6 +45,8 @@ services:
       context: ../control-api
       dockerfile: Dockerfile
     container_name: squad-control-api
+    env_file:
+      - ../.env
     restart: unless-stopped
     depends_on:
       postgres:
@@ -80,6 +86,8 @@ services:
         NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
         INTERNAL_API_URL: ${INTERNAL_API_URL:-http://control-api:8000}
         NEXT_PUBLIC_APP_PHASE: P4
+    env_file:
+      - ../.env
     container_name: squad-admin-web
     restart: unless-stopped
     depends_on:
@@ -97,6 +105,8 @@ services:
     build:
       context: ../workers
       dockerfile: Dockerfile
+    env_file:
+      - ../.env
     container_name: squad-workers
     restart: unless-stopped
     depends_on:
@@ -135,6 +145,8 @@ services:
     build:
       context: ../sandbox-dispatcher
       dockerfile: Dockerfile
+    env_file:
+      - ../.env
     container_name: squad-sandbox-dispatcher
     restart: unless-stopped
     environment:
@@ -149,6 +161,8 @@ services:
     build:
       context: ../sandbox-runner
       dockerfile: Dockerfile
+    env_file:
+      - ../.env
     container_name: squad-sandbox-runner
     restart: unless-stopped
     network_mode: none
@@ -162,14 +176,12 @@ services:
     build:
       context: ../github-svc
       dockerfile: Dockerfile
+    env_file:
+      - ../.env
     container_name: squad-github-svc
     restart: unless-stopped
     environment:
-      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
-      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
-      GITHUB_REPO_ORG: ${GITHUB_REPO_ORG:-}
-      GITHUB_REPO_NAME: ${GITHUB_REPO_NAME:-ai-squad-test-workspace}
     volumes:
       - ./secrets:/secrets:ro
     ports:

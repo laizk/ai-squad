@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import asyncpg
+import httpx
 
 from app.agents import dev_agent, judge_agent, pm_agent, qa_agent, reviewer_agent
 from app.celery_app import app
@@ -24,6 +25,8 @@ DATABASE_URL = os.environ.get(
     "WORKER_DATABASE_URL",
     "postgresql://squad_app:squadapp-local@localhost:5432/squad",
 )
+GITHUB_SVC_URL = os.environ.get("GITHUB_SVC_URL", "http://github-svc:9000")
+CONTROL_API_URL = os.environ.get("CONTROL_API_URL", "http://control-api:8000")
 
 # How many times dev-jr may be reworked before reviewer verdict is accepted as-is
 MAX_REWORK_RETRIES = int(os.environ.get("DEV_REWORK_MAX_RETRIES", "2"))
@@ -36,6 +39,44 @@ STUB_REGISTRY = {
     "qa":     qa_agent,        # sandbox-backed QA agent (P6)
     "judge":  judge_agent,     # real model-backed judge agent (P6)
 }
+
+
+def _sync_board_issue(run_id: str, project_name: str, brief: str, existing_issue: int | None) -> int | None:
+    """Create or update a GitHub issue for this run. Non-fatal — logs and returns None on failure."""
+    title = f"[ai-squad] {project_name}"
+    body = f"**Run:** `{run_id}`\n\n{brief[:1000]}"
+    try:
+        resp = httpx.post(
+            f"{GITHUB_SVC_URL}/api/v1/board/sync",
+            json={
+                "run_id": run_id,
+                "title": title,
+                "body": body,
+                "labels": ["ai-squad"],
+                "issue_number": existing_issue,
+            },
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("issue_number")
+        logger.warning("board/sync returned %s: %s", resp.status_code, resp.text[:200])
+    except Exception as exc:
+        logger.warning("board/sync call failed (non-fatal): %s", exc)
+    return None
+
+
+def _patch_run_github_refs(run_id: str, issue_number: int) -> None:
+    """Write the GitHub issue number back to control-api. Non-fatal."""
+    try:
+        resp = httpx.patch(
+            f"{CONTROL_API_URL}/api/v1/runs/{run_id}/github_refs",
+            json={"github_issue_number": issue_number},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            logger.warning("PATCH github_refs returned %s: %s", resp.status_code, resp.text[:200])
+    except Exception as exc:
+        logger.warning("PATCH github_refs failed (non-fatal): %s", exc)
 
 
 async def _run_step(run_id: str, step_id: str) -> None:
@@ -99,6 +140,18 @@ async def _run_step(run_id: str, step_id: str) -> None:
             name = project["name"] or ""
             desc = project["description"] or ""
             brief = f"{name}\n\n{desc}".strip()
+
+        # On the first step of a run, sync a GitHub board issue (non-fatal)
+        if step["step_order"] == 0 and run.get("github_issue_number") is None:
+            project_name = project["name"] if project else "AI Squad Run"
+            issue_number = _sync_board_issue(run_id, project_name, brief, existing_issue=None)
+            if issue_number is not None:
+                await conn.execute(
+                    "UPDATE runs SET github_issue_number = $1 WHERE id = $2",
+                    issue_number,
+                    UUID(run_id),
+                )
+                logger.info("Board issue #%s created for run %s", issue_number, run_id)
 
         # load prior artifacts for this run (gives downstream agents PM output etc.)
         prior_rows = await conn.fetch(

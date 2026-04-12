@@ -11,10 +11,12 @@ from app.routers.approvals import router as approvals_router
 from app.routers.artifacts import router as artifacts_router
 from app.routers.planning import router as planning_router
 from app.routers.projects import router as projects_router
+from app.routers.reconcile import router as reconcile_router
 from app.routers.revisions import router as revisions_router
 from app.routers.runs import router as runs_router
 from app.routers.sandbox import router as sandbox_router
 from app.routers.team_members import router as team_members_router
+from app.routers.webhooks import router as webhooks_router
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,8 @@ app.include_router(approvals_router)
 app.include_router(runs_router)
 app.include_router(sandbox_router)
 app.include_router(artifacts_router)
+app.include_router(webhooks_router)
+app.include_router(reconcile_router)
 
 
 @app.get("/")

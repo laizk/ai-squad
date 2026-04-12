@@ -11,6 +11,7 @@ from app.models import (
     OPTIONAL_ROLES_SKIPPED,
     WORKFLOW_STEPS,
     RunCreate,
+    RunGithubRefUpdate,
     RunListResponse,
     RunResponse,
     RunStepResponse,
@@ -53,6 +54,9 @@ def _serialize_run(row: Any, steps: list[dict[str, Any]]) -> dict[str, Any]:
         "completed_at": utc_value(row["completed_at"]),
         "error_message": row["error_message"],
         "created_at": utc_value(row["created_at"]),
+        "github_issue_number": row["github_issue_number"],
+        "github_branch": row["github_branch"],
+        "github_pr_number": row["github_pr_number"],
     }
 
 
@@ -425,6 +429,40 @@ async def cancel_run(run_id: UUID) -> RunResponse:
                 run_id,
             )
             row = await _fetch_run_or_404(conn, run_id)
+        return await _build_run_response(conn, row)
+    finally:
+        await conn.close()
+
+
+@router.patch("/{run_id}/github_refs", response_model=RunResponse)
+async def update_github_refs(run_id: UUID, payload: RunGithubRefUpdate) -> RunResponse:
+    """Store GitHub issue, branch, and PR references on a run.
+
+    Called by workers after github-svc creates issues/branches/PRs.
+    Only provided (non-None) fields are written; others are left unchanged.
+    """
+    conn = await open_ready_connection()
+    try:
+        row = await _fetch_run_or_404(conn, run_id)
+        updates: dict[str, Any] = {}
+        if payload.github_issue_number is not None:
+            updates["github_issue_number"] = payload.github_issue_number
+        if payload.github_branch is not None:
+            updates["github_branch"] = payload.github_branch
+        if payload.github_pr_number is not None:
+            updates["github_pr_number"] = payload.github_pr_number
+
+        if updates:
+            set_clause = ", ".join(
+                f"{col} = ${i + 2}" for i, col in enumerate(updates)
+            )
+            await conn.execute(
+                f"UPDATE runs SET {set_clause} WHERE id = $1",
+                run_id,
+                *updates.values(),
+            )
+            row = await _fetch_run_or_404(conn, run_id)
+
         return await _build_run_response(conn, row)
     finally:
         await conn.close()

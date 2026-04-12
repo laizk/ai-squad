@@ -504,6 +504,15 @@ class RunResponse(BaseModel):
     completed_at: datetime | None
     error_message: str | None
     created_at: datetime
+    github_issue_number: int | None = None
+    github_branch: str | None = None
+    github_pr_number: int | None = None
+
+
+class RunGithubRefUpdate(BaseModel):
+    github_issue_number: int | None = None
+    github_branch: str | None = None
+    github_pr_number: int | None = None
 
 
 class RunListResponse(BaseModel):

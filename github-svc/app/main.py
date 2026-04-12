@@ -281,6 +281,60 @@ async def create_pull(payload: PullCreate) -> dict[str, Any]:
     }
 
 
+# ── Board sync ───────────────────────────────────────────────────────────────
+
+class BoardSyncRequest(BaseModel):
+    run_id: str
+    title: str
+    body: str = ""
+    labels: list[str] = []
+    issue_number: int | None = None   # if set, update existing issue; else create
+
+
+@app.post("/api/v1/board/sync", status_code=status.HTTP_200_OK)
+async def board_sync(payload: BoardSyncRequest) -> dict[str, Any]:
+    """Create or update a GitHub issue representing a run on the project board.
+
+    - If issue_number is None, creates a new issue and returns its number.
+    - If issue_number is set, updates the title and body of the existing issue.
+
+    The caller (workers) is responsible for storing the returned issue_number
+    back on the run via PATCH /api/v1/runs/{run_id}/github_refs.
+    """
+    _require_configured()
+    token = _get_installation_token()
+
+    if payload.issue_number is None:
+        resp = _gh_post(
+            token,
+            f"/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}/issues",
+            {"title": payload.title, "body": payload.body, "labels": payload.labels},
+        )
+        _raise_for_gh(resp, "create board issue", expected=(201,))
+        data = resp.json()
+        return {
+            "action": "created",
+            "issue_number": data["number"],
+            "html_url": data["html_url"],
+            "run_id": payload.run_id,
+        }
+    else:
+        resp = httpx.patch(
+            f"{_GH_API}/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}/issues/{payload.issue_number}",
+            headers={**_GH_HEADERS, "Authorization": f"Bearer {token}"},
+            json={"title": payload.title, "body": payload.body},
+            timeout=15.0,
+        )
+        _raise_for_gh(resp, "update board issue", expected=(200,))
+        data = resp.json()
+        return {
+            "action": "updated",
+            "issue_number": data["number"],
+            "html_url": data["html_url"],
+            "run_id": payload.run_id,
+        }
+
+
 # ── GitHub App auth ───────────────────────────────────────────────────────────
 
 def _load_private_key() -> str:
