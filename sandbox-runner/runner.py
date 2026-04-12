@@ -97,12 +97,16 @@ def _execute(*, job_id: str, files: list[dict], command: list[str], timeout: flo
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f["content"], encoding="utf-8")
 
+        # Inherit a minimal env and set PYTHONPATH so src/ layouts resolve
+        run_env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "PYTHONPATH": workspace}
+
         start = time.monotonic()
         timed_out = False
         try:
             proc = subprocess.run(
                 command,
                 cwd=workspace,
+                env=run_env,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
