@@ -15,8 +15,9 @@ from uuid import UUID
 
 import asyncpg
 
+from app.agents import pm_agent
 from app.celery_app import app
-from app.stubs import pm_stub, reviewer_stub
+from app.stubs import reviewer_stub
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,10 @@ DATABASE_URL = os.environ.get(
     "postgresql://squad_app:squadapp-local@localhost:5432/squad",
 )
 
-# Map role → stub module
+# Map role → agent/stub module
 STUB_REGISTRY = {
-    "pm":     pm_stub,
-    "dev-jr": reviewer_stub,  # use reviewer stub for all non-PM roles in P3
+    "pm":     pm_agent,      # real Ollama-backed PM agent (P4)
+    "dev-jr": reviewer_stub,
     "dev-sr": reviewer_stub,
     "qa":     reviewer_stub,
     "judge":  reviewer_stub,
@@ -86,12 +87,24 @@ async def _run_step(run_id: str, step_id: str) -> None:
             UUID(step_id),
         )
 
-        # run the stub
+        # fetch project details so agents have the brief
+        project = await conn.fetchrow(
+            "SELECT name, description FROM projects WHERE id = $1",
+            run["project_id"],
+        )
+        brief = ""
+        if project:
+            name = project["name"] or ""
+            desc = project["description"] or ""
+            brief = f"{name}\n\n{desc}".strip()
+
+        # run the agent/stub
         context = {
             "run_id": run_id,
             "step_id": step_id,
             "project_id": str(run["project_id"]),
             "task_id": str(run["task_id"]) if run["task_id"] else None,
+            "brief": brief,
         }
         artifacts = stub.run(context)
 

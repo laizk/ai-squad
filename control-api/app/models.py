@@ -434,6 +434,7 @@ class ArtifactType(str, Enum):
     runbook = "runbook"
     rubric_score = "rubric_score"
     recommendation = "recommendation"
+    decision_log = "decision_log"
     other = "other"
 
 

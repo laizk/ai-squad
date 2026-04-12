@@ -25,3 +25,5 @@ node_modules/
 playwright-report/
 test-results/
 *.log
+infra/secrets/*.pem
+infra/secrets/*.key

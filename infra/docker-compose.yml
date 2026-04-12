@@ -1,5 +1,5 @@
-# AI Squad — Phase P3
-# Stack: postgres, redis, control-api, admin-web, workers.
+# AI Squad — Phase P4
+# Stack: postgres, redis, control-api, admin-web, workers, github-svc.
 
 services:
   postgres:
@@ -51,7 +51,7 @@ services:
       APP_NAME: AI Squad Control API
       APP_VERSION: 0.2.0-foundation
       APP_ENV: development
-      APP_PHASE: P3
+      APP_PHASE: P4
       HEALTH_TIMEOUT_SECONDS: 2.0
       DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
       MIGRATION_DATABASE_URL: postgresql://${POSTGRES_USER:-squad}:${POSTGRES_PASSWORD:-changeme-local}@postgres:5432/${POSTGRES_DB:-squad}
@@ -78,7 +78,7 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
         INTERNAL_API_URL: ${INTERNAL_API_URL:-http://control-api:8000}
-        NEXT_PUBLIC_APP_PHASE: P3
+        NEXT_PUBLIC_APP_PHASE: P4
     container_name: squad-admin-web
     restart: unless-stopped
     depends_on:
@@ -87,7 +87,7 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8000}
       INTERNAL_API_URL: ${INTERNAL_API_URL:-http://control-api:8000}
-      NEXT_PUBLIC_APP_PHASE: P3
+      NEXT_PUBLIC_APP_PHASE: P4
       NODE_ENV: production
     ports:
       - "3000:3000"
@@ -105,9 +105,31 @@ services:
         condition: service_healthy
       control-api:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       REDIS_URL: redis://redis:6379/0
       WORKER_DATABASE_URL: postgresql://${APP_DB_USER:-squad_app}:${APP_DB_PASSWORD:-squadapp-local}@postgres:5432/${POSTGRES_DB:-squad}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      PM_MODEL: ${PM_MODEL:-qwen2.5-coder:7b}
+      GITHUB_SVC_URL: http://github-svc:9000
+
+  github-svc:
+    build:
+      context: ../github-svc
+      dockerfile: Dockerfile
+    container_name: squad-github-svc
+    restart: unless-stopped
+    environment:
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
+      GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
+      GITHUB_REPO_ORG: ${GITHUB_REPO_ORG:-}
+      GITHUB_REPO_NAME: ${GITHUB_REPO_NAME:-ai-squad-test-workspace}
+    volumes:
+      - ./secrets:/secrets:ro
+    ports:
+      - "9000:9000"
 
 volumes:
   postgres_data:
