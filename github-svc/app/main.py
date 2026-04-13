@@ -9,6 +9,7 @@ If GITHUB_APP_ID is not configured, all mutation endpoints return 503.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import time
@@ -119,19 +120,7 @@ async def create_branch(payload: BranchCreate) -> dict[str, Any]:
         )
 
     token = _get_installation_token()
-
-    # Resolve base SHA
-    ref_resp = httpx.get(
-        f"{_GH_API}/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}/git/ref/heads/{payload.base}",
-        headers={**_GH_HEADERS, "Authorization": f"Bearer {token}"},
-        timeout=10.0,
-    )
-    if ref_resp.status_code != 200:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"could not resolve base branch '{payload.base}': {ref_resp.status_code}",
-        )
-    base_sha = ref_resp.json()["object"]["sha"]
+    actual_base, base_sha = _resolve_base_branch(token, payload.base)
 
     resp = _gh_post(
         token,
@@ -141,8 +130,23 @@ async def create_branch(payload: BranchCreate) -> dict[str, Any]:
             "sha": base_sha,
         },
     )
+    if _is_existing_ref_error(resp):
+        return {
+            "branch": payload.branch,
+            "base": actual_base,
+            "sha": base_sha,
+            "ref": None,
+            "already_exists": True,
+        }
+
     _raise_for_gh(resp, "create branch", expected=(201,))
-    return {"branch": payload.branch, "sha": base_sha, "ref": resp.json()}
+    return {
+        "branch": payload.branch,
+        "base": actual_base,
+        "sha": base_sha,
+        "ref": resp.json(),
+        "already_exists": False,
+    }
 
 
 @app.post("/api/v1/commits", status_code=status.HTTP_201_CREATED)
@@ -261,6 +265,7 @@ async def create_pull(payload: PullCreate) -> dict[str, Any]:
         )
 
     token = _get_installation_token()
+    actual_base, _ = _resolve_base_branch(token, payload.base)
     resp = _gh_post(
         token,
         f"/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}/pulls",
@@ -268,16 +273,27 @@ async def create_pull(payload: PullCreate) -> dict[str, Any]:
             "title": payload.title,
             "body": payload.body,
             "head": payload.head,
-            "base": payload.base,
+            "base": actual_base,
         },
     )
+    if _is_existing_pull_error(resp):
+        existing = _find_existing_pull(token, head=payload.head, base=actual_base)
+        if existing is not None:
+            return {
+                "number": existing["number"],
+                "html_url": existing["html_url"],
+                "head": payload.head,
+                "base": actual_base,
+                "already_exists": True,
+            }
     _raise_for_gh(resp, "create pull request", expected=(201,))
     data = resp.json()
     return {
         "number": data["number"],
         "html_url": data["html_url"],
         "head": payload.head,
-        "base": payload.base,
+        "base": actual_base,
+        "already_exists": False,
     }
 
 
@@ -386,10 +402,151 @@ def _gh_post(token: str, path: str, body: dict) -> httpx.Response:
     )
 
 
-def _raise_for_gh(resp: httpx.Response, action: str, expected: tuple = (200, 201)) -> None:
-    if resp.status_code not in expected:
-        logger.error("GitHub API %s returned %s: %s", action, resp.status_code, resp.text[:300])
+def _gh_get(token: str, path: str) -> httpx.Response:
+    return httpx.get(
+        f"{_GH_API}{path}",
+        headers={**_GH_HEADERS, "Authorization": f"Bearer {token}"},
+        timeout=15.0,
+    )
+
+
+def _resolve_base_branch(token: str, requested_base: str) -> tuple[str, str]:
+    requested_resp = _gh_get(
+        token,
+        f"/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}/git/ref/heads/{requested_base}",
+    )
+    if requested_resp.status_code == 200:
+        return requested_base, requested_resp.json()["object"]["sha"]
+    if requested_resp.status_code == 409:
+        return requested_base, _bootstrap_base_branch(token, requested_base)
+
+    repo_resp = _gh_get(token, f"/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}")
+    _raise_for_gh(repo_resp, "load repository", expected=(200,))
+    default_branch = repo_resp.json().get("default_branch")
+    if (
+        requested_resp.status_code == 404
+        and isinstance(default_branch, str)
+        and default_branch in ("main", "master")
+        and default_branch != requested_base
+    ):
+        fallback_resp = _gh_get(
+            token,
+            f"/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}/git/ref/heads/{default_branch}",
+        )
+        if fallback_resp.status_code == 200:
+            return default_branch, fallback_resp.json()["object"]["sha"]
+        if fallback_resp.status_code == 409:
+            return default_branch, _bootstrap_base_branch(token, default_branch)
+
+    detail = _extract_error_detail(requested_resp)
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=(
+            f"could not resolve base branch '{requested_base}': "
+            f"{requested_resp.status_code} {detail}"
+        ),
+    )
+
+
+def _bootstrap_base_branch(token: str, branch: str) -> str:
+    logger.warning(
+        "Repository %s/%s is empty; bootstrapping base branch %s",
+        GITHUB_REPO_ORG,
+        GITHUB_REPO_NAME,
+        branch,
+    )
+    repo = f"/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}"
+
+    resp = httpx.put(
+        f"{_GH_API}{repo}/contents/README.md",
+        headers={**_GH_HEADERS, "Authorization": f"Bearer {token}"},
+        json={
+            "message": f"chore: bootstrap {branch} branch",
+            "content": base64.b64encode(
+                b"# AI Squad Test Workspace\n\nBootstrapped by github-svc.\n"
+            ).decode(),
+            "branch": branch,
+        },
+        timeout=20.0,
+    )
+    if resp.status_code not in (200, 201):
+        detail = _extract_error_detail(resp)
+        existing = _gh_get(token, f"{repo}/git/ref/heads/{branch}")
+        if existing.status_code == 200:
+            return existing.json()["object"]["sha"]
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"GitHub API error on {action}: {resp.status_code}",
+            detail=f"GitHub API error on bootstrap base branch: {resp.status_code} {detail}",
+        )
+
+    ref_resp = _gh_get(token, f"{repo}/git/ref/heads/{branch}")
+    _raise_for_gh(ref_resp, "load bootstrapped branch ref", expected=(200,))
+    return ref_resp.json()["object"]["sha"]
+
+
+def _find_existing_pull(token: str, *, head: str, base: str) -> dict[str, Any] | None:
+    resp = httpx.get(
+        f"{_GH_API}/repos/{GITHUB_REPO_ORG}/{GITHUB_REPO_NAME}/pulls",
+        headers={**_GH_HEADERS, "Authorization": f"Bearer {token}"},
+        params={"state": "open", "head": f"{GITHUB_REPO_ORG}:{head}", "base": base},
+        timeout=15.0,
+    )
+    _raise_for_gh(resp, "list existing pull requests", expected=(200,))
+    pulls = resp.json()
+    if pulls:
+        return pulls[0]
+    return None
+
+
+def _extract_error_detail(resp: httpx.Response) -> str:
+    try:
+        data = resp.json()
+    except Exception:
+        return resp.text[:200]
+
+    if isinstance(data, dict):
+        parts = []
+        if data.get("message"):
+            parts.append(str(data["message"]))
+        errors = data.get("errors")
+        if isinstance(errors, list):
+            rendered = []
+            for item in errors[:3]:
+                if isinstance(item, dict):
+                    rendered.append(
+                        ", ".join(
+                            str(item.get(key))
+                            for key in ("resource", "field", "code", "message")
+                            if item.get(key)
+                        )
+                    )
+                else:
+                    rendered.append(str(item))
+            if rendered:
+                parts.append("; ".join(rendered))
+        if parts:
+            return " | ".join(parts)
+    return json.dumps(data)[:200]
+
+
+def _is_existing_ref_error(resp: httpx.Response) -> bool:
+    if resp.status_code != 422:
+        return False
+    detail = _extract_error_detail(resp).lower()
+    return "reference already exists" in detail or "ref already exists" in detail
+
+
+def _is_existing_pull_error(resp: httpx.Response) -> bool:
+    if resp.status_code != 422:
+        return False
+    detail = _extract_error_detail(resp).lower()
+    return "a pull request already exists" in detail
+
+
+def _raise_for_gh(resp: httpx.Response, action: str, expected: tuple = (200, 201)) -> None:
+    if resp.status_code not in expected:
+        logger.error("GitHub API %s returned %s: %s", action, resp.status_code, _extract_error_detail(resp))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"GitHub API error on {action}: {resp.status_code} {_extract_error_detail(resp)}",
         )

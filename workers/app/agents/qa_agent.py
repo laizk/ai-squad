@@ -33,7 +33,7 @@ def run(context: dict) -> list[dict]:
             sandbox_result=None,
         )]
 
-    sandbox_result = _run_sandbox(files)
+    sandbox_result = _run_sandbox(files, tests_required=True)
     status = "passed" if sandbox_result.get("exit_code") == 0 else "failed"
     if sandbox_result.get("skipped"):
         status = "skipped"

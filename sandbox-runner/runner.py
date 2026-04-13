@@ -117,8 +117,20 @@ def _execute(*, job_id: str, files: list[dict], command: list[str], timeout: flo
         except subprocess.TimeoutExpired as exc:
             timed_out = True
             exit_code = -1
-            stdout    = (exc.stdout or b"")[:MAX_OUTPUT].decode(errors="replace")
-            stderr    = f"[runner] execution timed out after {timeout}s"
+            stdout_data = exc.stdout or ""
+            stderr_data = exc.stderr or ""
+            if isinstance(stdout_data, bytes):
+                stdout = stdout_data[:MAX_OUTPUT].decode(errors="replace")
+            else:
+                stdout = stdout_data[:MAX_OUTPUT]
+            if isinstance(stderr_data, bytes):
+                stderr = stderr_data[:MAX_OUTPUT].decode(errors="replace")
+            else:
+                stderr = stderr_data[:MAX_OUTPUT]
+            if stderr:
+                stderr = f"{stderr}\n[runner] execution timed out after {timeout}s"
+            else:
+                stderr = f"[runner] execution timed out after {timeout}s"
         duration = time.monotonic() - start
 
         return {

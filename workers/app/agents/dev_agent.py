@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
+from typing import Any
 
 import httpx
 
@@ -34,12 +34,16 @@ logger = logging.getLogger(__name__)
 GITHUB_SVC_URL      = os.environ.get("GITHUB_SVC_URL",      "http://github-svc:9000")
 CONTROL_API_URL     = os.environ.get("CONTROL_API_URL",     "http://control-api:8000")
 SANDBOX_TIMEOUT     = float(os.environ.get("SANDBOX_TIMEOUT", "60"))
+DEV_SANDBOX_MAX_ATTEMPTS = max(1, int(os.environ.get("DEV_SANDBOX_MAX_ATTEMPTS", "2")))
 
 # Per-agent provider config — falls back to shared PM_ vars when unset
 DEV_JR_PROVIDER     = os.environ.get("DEV_JR_PROVIDER", "").strip().lower() or PM_LLM_PROVIDER
 DEV_JR_BASE_URL     = os.environ.get("DEV_JR_BASE_URL", "").strip()
 DEV_JR_MODEL        = os.environ.get("DEV_JR_MODEL",    "").strip() or PM_MODEL
 DEV_JR_API_KEY      = os.environ.get("DEV_JR_API_KEY",  "").strip()
+DEV_JR_REQUEST_TIMEOUT_SECONDS = float(
+    os.environ.get("DEV_JR_REQUEST_TIMEOUT_SECONDS", str(PM_REQUEST_TIMEOUT_SECONDS))
+)
 
 # ── Output contract ────────────────────────────────────────────────────────────
 
@@ -69,7 +73,8 @@ Rules:
 - Write real, working code — no placeholders, no TODO stubs
 - Keep the implementation bounded: address the tasks given, nothing more
 - Do NOT write to .github/ paths
-- File paths must be relative, no leading slash"""
+- File paths must be relative, no leading slash
+- Do not return tests without the implementation files they exercise"""
 
 
 def run(context: dict) -> list[dict]:
@@ -82,31 +87,67 @@ def run(context: dict) -> list[dict]:
     # Pull tasks from PM artifact
     tasks_json = _find_artifact(prior_artifacts, "tasks")
     tasks_summary = _summarise_tasks(tasks_json)
-
-    user_message = (
-        f"/no_think\n\n"
-        f"Project ID: {project_id}\n\n"
-        f"Project brief:\n{brief}\n\n"
-        f"Tasks to implement:\n{tasks_summary}"
-    )
-
-    raw = _call_model(user_message)
-    data = _parse_json(raw)
-
-    files = data.get("files", [])
-    if not files:
-        raise RuntimeError(
-            "Dev agent model returned no files. "
-            f"Parsed keys: {list(data.keys())}. First 300 chars of raw: {raw[:300]}"
-        )
-    commit_message = data.get("commit_message", "feat: ai-squad implementation")
-    pr_title = data.get("pr_title", f"AI Squad: implementation for run {run_id[:8]}")
-    pr_body = data.get("pr_body", "")
+    review_json = _find_artifact(prior_artifacts, "review_findings")
+    prior_sandbox_json = _find_artifact(prior_artifacts, "sandbox_result")
+    tests_required = _tests_required(brief, tasks_summary)
 
     branch = f"ai-squad/run-{run_id[:8]}"
+    user_message = _build_initial_user_message(
+        project_id=project_id,
+        brief=brief,
+        tasks_summary=tasks_summary,
+        review_json=review_json,
+        sandbox_json=prior_sandbox_json,
+        tests_required=tests_required,
+    )
 
-    # Run sandbox before committing — reviewer sees test evidence
-    sandbox_result = _run_sandbox(files)
+    data: dict[str, Any] = {}
+    files: list[dict] = []
+    commit_message = "feat: ai-squad implementation"
+    pr_title = f"AI Squad: implementation for run {run_id[:8]}"
+    pr_body = ""
+    sandbox_result: dict[str, Any] = {"skipped": True, "exit_code": None, "job_id": None}
+    attempts_used = 0
+
+    for attempt in range(1, DEV_SANDBOX_MAX_ATTEMPTS + 1):
+        attempts_used = attempt
+        raw = _call_model(user_message)
+        data = _parse_json(raw)
+
+        files = data.get("files", [])
+        if not files:
+            raise RuntimeError(
+                "Dev agent model returned no files. "
+                f"Parsed keys: {list(data.keys())}. First 300 chars of raw: {raw[:300]}"
+            )
+        commit_message = data.get("commit_message", "feat: ai-squad implementation")
+        pr_title = data.get("pr_title", f"AI Squad: implementation for run {run_id[:8]}")
+        pr_body = data.get("pr_body", "")
+
+        sandbox_result = _preflight_generated_files(files, tests_required=tests_required)
+        if sandbox_result is None:
+            # Run sandbox before committing — reviewer sees test evidence
+            sandbox_result = _run_sandbox(files, tests_required=tests_required)
+        if sandbox_result.get("skipped") or sandbox_result.get("exit_code") == 0:
+            break
+        if attempt >= DEV_SANDBOX_MAX_ATTEMPTS:
+            break
+
+        logger.info(
+            "Sandbox failed on dev attempt %d/%d for run %s; requesting targeted repair",
+            attempt,
+            DEV_SANDBOX_MAX_ATTEMPTS,
+            run_id,
+        )
+        user_message = _build_repair_user_message(
+            project_id=project_id,
+            brief=brief,
+            tasks_summary=tasks_summary,
+            review_json=review_json,
+            tests_required=tests_required,
+            files=files,
+            sandbox_result=sandbox_result,
+        )
 
     github_result = _push_to_github(
         run_id=run_id,
@@ -129,6 +170,7 @@ def run(context: dict) -> list[dict]:
             "timed_out":        sandbox_result.get("timed_out"),
             "skipped":          sandbox_result.get("skipped", False),
         },
+        "sandbox_attempts": attempts_used,
     }
 
     artifacts = [
@@ -163,17 +205,37 @@ def validate(artifact_type: str, body: str) -> bool:
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _run_sandbox(files: list[dict]) -> dict:
+def _run_sandbox(files: list[dict], *, tests_required: bool) -> dict:
     """Run pytest on the generated files via the control-api sandbox proxy.
 
     Non-fatal: returns a skipped result if the endpoint is unreachable.
     Detects test files automatically; falls back to plain python check if none found.
     """
-    has_tests = any(
-        f["path"].startswith("test_") or "/test_" in f["path"] or f["path"].endswith("_test.py")
-        for f in files
-    )
-    command = ["pytest", "-q", "--tb=short"] if has_tests else ["python", "-c", "print('no tests')"]
+    test_files = [
+        f["path"] for f in files
+        if f["path"].startswith("test_") or "/test_" in f["path"] or f["path"].endswith("_test.py")
+    ]
+    python_files = [f["path"] for f in files if f["path"].endswith(".py")]
+
+    if test_files:
+        command = ["pytest", "-q", "--tb=short"]
+    elif tests_required:
+        return {
+            "job_id": None,
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": (
+                "[dev-agent] No pytest-style test files were generated even though "
+                "the brief or tasks require tests."
+            ),
+            "duration_seconds": 0.0,
+            "timed_out": False,
+            "error": "missing required tests",
+        }
+    elif python_files:
+        command = ["python", "-m", "py_compile", *python_files]
+    else:
+        command = ["python", "-c", "print('no runnable files')"]
 
     try:
         resp = httpx.post(
@@ -201,6 +263,37 @@ def _run_sandbox(files: list[dict]) -> dict:
         return {"skipped": True, "exit_code": None, "job_id": None, "error": str(exc)}
 
 
+def _preflight_generated_files(files: list[dict], *, tests_required: bool) -> dict[str, Any] | None:
+    if not tests_required:
+        return None
+
+    test_files = [f for f in files if _is_test_file(f.get("path", ""))]
+    if not test_files:
+        return None
+
+    implementation_files = [f for f in files if _is_implementation_file(f.get("path", ""))]
+    if not implementation_files:
+        return _synthetic_sandbox_failure(
+            error="missing implementation files",
+            stderr=(
+                "[dev-agent] Tests were generated without any non-test implementation files. "
+                "Return the implementation and the tests together."
+            ),
+        )
+
+    src_required = any(_references_src_package(str(f.get("content", ""))) for f in test_files)
+    if src_required and not any(str(f.get("path", "")).startswith("src/") for f in implementation_files):
+        return _synthetic_sandbox_failure(
+            error="missing src implementation",
+            stderr=(
+                "[dev-agent] Tests import src.* but no file under src/ was generated. "
+                "Return the implementation module alongside the tests."
+            ),
+        )
+
+    return None
+
+
 def _find_artifact(prior_artifacts: list[dict], artifact_type: str) -> str | None:
     """Return the body of the most recent artifact matching artifact_type."""
     for art in reversed(prior_artifacts):
@@ -225,6 +318,175 @@ def _summarise_tasks(tasks_body: str | None) -> str:
         return "\n".join(lines) if lines else "Empty tasks list."
     except Exception:
         return tasks_body[:1000]
+
+
+def _build_initial_user_message(
+    *,
+    project_id: str,
+    brief: str,
+    tasks_summary: str,
+    review_json: str | None,
+    sandbox_json: str | None,
+    tests_required: bool,
+) -> str:
+    parts = [
+        "/no_think",
+        f"Project ID: {project_id}",
+        f"Project brief:\n{brief}",
+        f"Tasks to implement:\n{tasks_summary}",
+    ]
+
+    review_summary = _summarise_review_findings(review_json)
+    if review_summary:
+        parts.append(
+            "This run is a rework. Fix the reviewer findings below instead of repeating the earlier defects:\n"
+            f"{review_summary}"
+        )
+
+    sandbox_summary = _summarise_sandbox_failure(sandbox_json)
+    if sandbox_summary:
+        parts.append(
+            "The previous implementation failed sandbox execution. Your output must fix these test failures:\n"
+            f"{sandbox_summary}"
+        )
+
+    if tests_required:
+        parts.append(
+            "Pytest tests are required for this task. Include pytest-style test files and the implementation files they exercise, and make sure they pass together."
+        )
+
+    parts.append(
+        "Return code and tests that pass together. If you include pytest tests, make sure they are consistent with the implementation."
+    )
+    return "\n\n".join(parts)
+
+
+def _build_repair_user_message(
+    *,
+    project_id: str,
+    brief: str,
+    tasks_summary: str,
+    review_json: str | None,
+    tests_required: bool,
+    files: list[dict],
+    sandbox_result: dict[str, Any],
+) -> str:
+    parts = [
+        "/no_think",
+        "Your previous candidate failed sandbox execution. Repair the implementation and return a full replacement JSON payload.",
+        f"Project ID: {project_id}",
+        f"Project brief:\n{brief}",
+        f"Tasks to implement:\n{tasks_summary}",
+    ]
+
+    review_summary = _summarise_review_findings(review_json)
+    if review_summary:
+        parts.append(f"Reviewer findings to address:\n{review_summary}")
+
+    if tests_required:
+        parts.append(
+            "Pytest tests are mandatory here. Do not remove or omit tests to make the sandbox pass, and do not return tests without the implementation files they cover."
+        )
+
+    parts.append(f"Sandbox failure details:\n{_format_sandbox_result_for_prompt(sandbox_result)}")
+    parts.append(f"Current candidate files:\n{_render_files_for_prompt(files)}")
+    parts.append(
+        "Fix the failing behavior and keep the implementation bounded to the requested task. Return complete file contents for every file you want in the final change."
+    )
+    return "\n\n".join(parts)
+
+
+def _summarise_review_findings(review_body: str | None) -> str:
+    if not review_body:
+        return ""
+    try:
+        data = json.loads(review_body)
+    except Exception:
+        return review_body[:1500]
+
+    findings = data.get("findings") or []
+    lines = []
+    for idx, finding in enumerate(findings[:6], start=1):
+        severity = str(finding.get("severity", "info")).upper()
+        area = finding.get("area", "unknown")
+        detail = str(finding.get("detail", "")).strip()
+        if detail:
+            lines.append(f"{idx}. [{severity}] {area}: {detail}")
+
+    recommendation = str(data.get("recommendation", "")).strip()
+    if recommendation:
+        lines.append(f"Recommendation: {recommendation}")
+    return "\n".join(lines)
+
+
+def _summarise_sandbox_failure(sandbox_body: str | None) -> str:
+    if not sandbox_body:
+        return ""
+    try:
+        data = json.loads(sandbox_body)
+    except Exception:
+        return sandbox_body[:1500]
+    return _format_sandbox_result_for_prompt(data)
+
+
+def _format_sandbox_result_for_prompt(sandbox_result: dict[str, Any]) -> str:
+    lines = [
+        f"exit_code={sandbox_result.get('exit_code')}",
+        f"timed_out={sandbox_result.get('timed_out')}",
+    ]
+    stdout = str(sandbox_result.get("stdout") or "").strip()
+    stderr = str(sandbox_result.get("stderr") or "").strip()
+    if stdout:
+        lines.append(f"stdout:\n{stdout[:2000]}")
+    if stderr:
+        lines.append(f"stderr:\n{stderr[:2000]}")
+    return "\n".join(lines)
+
+
+def _render_files_for_prompt(files: list[dict], max_chars: int = 16000) -> str:
+    rendered: list[str] = []
+    used = 0
+    for file_info in files:
+        path = file_info.get("path", "<unknown>")
+        content = str(file_info.get("content", ""))
+        block = f"=== {path} ===\n{content}"
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        if len(block) > remaining:
+            block = f"=== {path} ===\n{content[: max(0, remaining - len(path) - 16)]}\n[truncated]"
+        rendered.append(block)
+        used += len(block) + 2
+    return "\n\n".join(rendered)
+
+
+def _tests_required(brief: str, tasks_summary: str) -> bool:
+    haystack = f"{brief}\n{tasks_summary}".lower()
+    return "pytest" in haystack or "test" in haystack or "tests" in haystack
+
+
+def _is_test_file(path: str) -> bool:
+    return path.startswith("test_") or "/test_" in path or path.endswith("_test.py")
+
+
+def _is_implementation_file(path: str) -> bool:
+    return bool(path) and not _is_test_file(path)
+
+
+def _references_src_package(content: str) -> bool:
+    return "from src." in content or "import src." in content
+
+
+def _synthetic_sandbox_failure(*, error: str, stderr: str) -> dict[str, Any]:
+    return {
+        "job_id": None,
+        "exit_code": 1,
+        "stdout": "",
+        "stderr": stderr,
+        "duration_seconds": 0.0,
+        "timed_out": False,
+        "error": error,
+    }
 
 
 def _resolve_dev_jr_url() -> str:
@@ -270,10 +532,17 @@ def _call_ollama(base_url: str, user_message: str) -> str:
         response = httpx.post(
             f"{base_url}/api/chat",
             json=payload,
-            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+            timeout=DEV_JR_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return response.json()["message"]["content"]
+    except httpx.ReadTimeout as exc:
+        raise RuntimeError(
+            "Ollama call timed out for dev-jr "
+            f"(model={DEV_JR_MODEL}, timeout={DEV_JR_REQUEST_TIMEOUT_SECONDS}s). "
+            "This usually means generation is too slow or the Ollama runner is stuck. "
+            "If `ollama ps` shows `Stopping...`, restart or unload the model before retrying."
+        ) from exc
     except Exception as exc:
         raise RuntimeError(f"Ollama call failed: {exc}") from exc
 
@@ -298,7 +567,7 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
             f"{base_url}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+            timeout=DEV_JR_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return _extract_response_content(response.json())

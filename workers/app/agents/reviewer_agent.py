@@ -33,6 +33,9 @@ DEV_SR_PROVIDER     = os.environ.get("DEV_SR_PROVIDER", "").strip().lower() or P
 DEV_SR_BASE_URL     = os.environ.get("DEV_SR_BASE_URL", "").strip()
 DEV_SR_MODEL        = os.environ.get("DEV_SR_MODEL",    "").strip() or PM_MODEL
 DEV_SR_API_KEY      = os.environ.get("DEV_SR_API_KEY",  "").strip()
+DEV_SR_REQUEST_TIMEOUT_SECONDS = float(
+    os.environ.get("DEV_SR_REQUEST_TIMEOUT_SECONDS", str(PM_REQUEST_TIMEOUT_SECONDS))
+)
 
 VALID_VERDICTS = {"approved", "changes_requested", "rejected"}
 VALID_SEVERITIES = {"info", "warning", "critical"}
@@ -265,10 +268,17 @@ def _call_ollama(base_url: str, user_message: str) -> str:
         response = httpx.post(
             f"{base_url}/api/chat",
             json=payload,
-            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+            timeout=DEV_SR_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return response.json()["message"]["content"]
+    except httpx.ReadTimeout as exc:
+        raise RuntimeError(
+            "Ollama call timed out for dev-sr "
+            f"(model={DEV_SR_MODEL}, timeout={DEV_SR_REQUEST_TIMEOUT_SECONDS}s). "
+            "This usually means generation is too slow or the Ollama runner is stuck. "
+            "If `ollama ps` shows `Stopping...`, restart or unload the model before retrying."
+        ) from exc
     except Exception as exc:
         raise RuntimeError(f"Ollama call failed: {exc}") from exc
 
@@ -293,7 +303,7 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
             f"{base_url}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+            timeout=DEV_SR_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return _extract_response_content(response.json())
@@ -312,5 +322,4 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
         ) from exc
     except Exception as exc:
         raise RuntimeError(f"Reviewer model call failed: {exc}") from exc
-
 

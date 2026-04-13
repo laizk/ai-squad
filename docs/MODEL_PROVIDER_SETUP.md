@@ -12,6 +12,26 @@ This repo can route the PM agent to different local model servers through worker
 - `PM_SERIALIZE_LOCAL_CALLS`
 - `PM_LOCAL_CALL_LOCK_PATH`
 
+## Per-agent overrides
+
+These roles can override the shared PM model settings:
+
+- `DEV_JR_PROVIDER`
+- `DEV_JR_BASE_URL`
+- `DEV_JR_MODEL`
+- `DEV_JR_API_KEY`
+- `DEV_JR_REQUEST_TIMEOUT_SECONDS`
+- `DEV_SR_PROVIDER`
+- `DEV_SR_BASE_URL`
+- `DEV_SR_MODEL`
+- `DEV_SR_API_KEY`
+- `DEV_SR_REQUEST_TIMEOUT_SECONDS`
+- `JUDGE_PROVIDER`
+- `JUDGE_BASE_URL`
+- `JUDGE_MODEL`
+- `JUDGE_API_KEY`
+- `JUDGE_REQUEST_TIMEOUT_SECONDS`
+
 ## Supported provider values
 
 - `lmstudio`
@@ -72,6 +92,13 @@ PM_MODEL=/models/qwen2.5-coder-7b-instruct-q4_k_m.gguf
 PM_LLM_PROVIDER=ollama
 OLLAMA_URL=http://host.docker.internal:11434
 PM_MODEL=qwen2.5-coder:7b
+PM_REQUEST_TIMEOUT_SECONDS=1200
+DEV_JR_MODEL=qwen3.5:9b
+DEV_JR_REQUEST_TIMEOUT_SECONDS=600
+DEV_SR_MODEL=qwen3.5:35b-a3b
+DEV_SR_REQUEST_TIMEOUT_SECONDS=1800
+JUDGE_MODEL=qwen3.5:9b
+JUDGE_REQUEST_TIMEOUT_SECONDS=600
 ```
 
 ## Notes
@@ -82,3 +109,4 @@ PM_MODEL=qwen2.5-coder:7b
 - `PM_SERIALIZE_LOCAL_CALLS=true` is the safe default for local runtimes. It serializes PM model calls across worker processes with a file lock to avoid LM Studio/llama.cpp/MLX/Ollama concurrency failures on a single machine.
 - `PM_LOCAL_CALL_LOCK_PATH` defaults to `/tmp/ai-squad-pm-llm.lock`.
 - During LM Studio testing with `qwen/qwen3.5-9b`, overlapping PM runs produced `400 Bad Request` responses backed by `Context size has been exceeded` in LM Studio server logs. The lock is intended to avoid that failure mode.
+- For Ollama, use shorter `DEV_JR_REQUEST_TIMEOUT_SECONDS` values so junior generation failures surface quickly, and keep a separate, usually longer, `DEV_SR_REQUEST_TIMEOUT_SECONDS` if the senior reviewer runs a larger model such as `qwen3.5:35b-a3b`.

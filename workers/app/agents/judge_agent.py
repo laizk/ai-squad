@@ -26,6 +26,9 @@ JUDGE_PROVIDER = os.environ.get("JUDGE_PROVIDER", "").strip().lower() or os.envi
 JUDGE_BASE_URL = os.environ.get("JUDGE_BASE_URL", "").strip() or os.environ.get("DEV_SR_BASE_URL", "").strip()
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "").strip() or os.environ.get("DEV_SR_MODEL", "").strip() or PM_MODEL
 JUDGE_API_KEY = os.environ.get("JUDGE_API_KEY", "").strip() or os.environ.get("DEV_SR_API_KEY", "").strip()
+JUDGE_REQUEST_TIMEOUT_SECONDS = float(
+    os.environ.get("JUDGE_REQUEST_TIMEOUT_SECONDS", str(PM_REQUEST_TIMEOUT_SECONDS))
+)
 
 VALID_DECISIONS = {"ready_for_approval", "needs_changes", "rejected"}
 REQUIRED_KEYS = ["score", "decision", "dimension_scores", "recommendation"]
@@ -191,10 +194,17 @@ def _call_ollama(base_url: str, user_message: str) -> str:
         response = httpx.post(
             f"{base_url}/api/chat",
             json=payload,
-            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+            timeout=JUDGE_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return response.json()["message"]["content"]
+    except httpx.ReadTimeout as exc:
+        raise RuntimeError(
+            "Ollama call timed out for judge "
+            f"(model={JUDGE_MODEL}, timeout={JUDGE_REQUEST_TIMEOUT_SECONDS}s). "
+            "This usually means generation is too slow or the Ollama runner is stuck. "
+            "If `ollama ps` shows `Stopping...`, restart or unload the model before retrying."
+        ) from exc
     except Exception as exc:
         raise RuntimeError(f"Ollama call failed: {exc}") from exc
 
@@ -220,7 +230,7 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
             f"{base_url}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=PM_REQUEST_TIMEOUT_SECONDS,
+            timeout=JUDGE_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return _extract_response_content(response.json())
