@@ -8,12 +8,56 @@ import pytest
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
+TEST_RUN_KEY_PREFIXES = (
+    "test-",
+    "idempotent-",
+    "p4-test-",
+    "p5-test-",
+    "p5-reviewer-",
+    "p6-qa-judge-",
+    "p6-approval-evidence-",
+    "p8-",
+    "p10-test-",
+    "p10-idempotent-",
+    "p10-pause-cancel-",
+    "p10-backoff-dedup-",
+    "key-a-",
+    "key-b-",
+)
 
 
 @pytest.fixture(scope="session")
 def client() -> httpx.Client:
     with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as http:
         yield http
+
+
+def _cancel_non_terminal_test_runs() -> None:
+    try:
+        with httpx.Client(base_url=API_BASE_URL, timeout=10.0) as cleanup_client:
+            response = cleanup_client.get("/runs?per_page=200")
+            response.raise_for_status()
+
+            for run in response.json().get("items", []):
+                key = run.get("idempotency_key") or ""
+                if not key.startswith(TEST_RUN_KEY_PREFIXES):
+                    continue
+                if run.get("status") not in {"running", "paused"}:
+                    continue
+                try:
+                    cleanup_client.post(f"/runs/{run['id']}/cancel")
+                except Exception:
+                    pass
+    except Exception:
+        return
+
+
+@pytest.fixture(autouse=True)
+def cancel_created_runs() -> None:
+    """Keep integration-test runs from accumulating in the shared worker queue."""
+    _cancel_non_terminal_test_runs()
+    yield
+    _cancel_non_terminal_test_runs()
 
 
 @pytest.fixture

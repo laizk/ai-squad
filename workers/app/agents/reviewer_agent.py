@@ -36,6 +36,7 @@ DEV_SR_API_KEY      = os.environ.get("DEV_SR_API_KEY",  "").strip()
 DEV_SR_REQUEST_TIMEOUT_SECONDS = float(
     os.environ.get("DEV_SR_REQUEST_TIMEOUT_SECONDS", str(PM_REQUEST_TIMEOUT_SECONDS))
 )
+DEV_SR_NUM_CTX = int(os.environ.get("DEV_SR_NUM_CTX", "8192"))
 
 VALID_VERDICTS = {"approved", "changes_requested", "rejected"}
 VALID_SEVERITIES = {"info", "warning", "critical"}
@@ -78,19 +79,35 @@ def run(context: dict) -> list[dict]:
     prior_artifacts = context.get("prior_artifacts", [])
     brief = context.get("brief", "No brief provided.")
 
+    spec_json     = _find_artifact(prior_artifacts, "spec")
     tasks_json    = _find_artifact(prior_artifacts, "tasks")
+    decision_json = _find_artifact(prior_artifacts, "decision_log")
+    review_json   = _find_artifact(prior_artifacts, "review_findings")
     dev_output    = _find_artifact(prior_artifacts, "dev_output")
     sandbox_json  = _find_artifact(prior_artifacts, "sandbox_result")
 
     user_message = _build_user_message(
         brief=brief,
+        spec_json=spec_json,
         tasks_json=tasks_json,
+        decision_json=decision_json,
+        review_json=review_json,
         dev_output=dev_output,
         sandbox_json=sandbox_json,
     )
+    logger.info(
+        "Reviewer prompt assembled with %d chars (num_ctx=%d)",
+        len(user_message),
+        DEV_SR_NUM_CTX,
+    )
 
     raw = _call_model(user_message)
-    data = _parse_json(raw)
+    try:
+        data = _parse_json(raw)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Reviewer model did not return valid JSON. First 500 chars: {raw[:500]}"
+        ) from exc
 
     # Normalise and validate
     verdict = data.get("verdict", "changes_requested").strip().lower()
@@ -171,39 +188,104 @@ def _extract_commit(dev_output_body: str | None) -> str | None:
 def _build_user_message(
     *,
     brief: str,
+    spec_json: str | None,
     tasks_json: str | None,
+    decision_json: str | None,
+    review_json: str | None,
     dev_output: str | None,
     sandbox_json: str | None,
 ) -> str:
-    parts = ["/no_think", f"Project brief:\n{brief}"]
+    parts = [
+        "/no_think",
+        "Review this implementation for merge readiness. Base your verdict on the actual files, the PM plan, and sandbox evidence.",
+        f"Project brief:\n{brief}",
+    ]
+
+    if spec_json:
+        try:
+            spec = json.loads(spec_json)
+            milestone_lines = []
+            for i, milestone in enumerate(spec.get("milestones", [])[:4], 1):
+                title = milestone.get("title", "?")
+                ac = milestone.get("acceptance_criteria", [])
+                ac_text = "; ".join(str(item) for item in ac)
+                milestone_lines.append(f"{i}. {title} — AC: {ac_text}")
+            parts.append(
+                "PM spec:\n"
+                f"Summary: {spec.get('brief_summary', '')}\n"
+                + ("\n".join(milestone_lines) if milestone_lines else "No milestones provided.")
+            )
+        except Exception:
+            parts.append(f"PM spec (raw):\n{spec_json[:800]}")
 
     if tasks_json:
         try:
             tasks = json.loads(tasks_json).get("tasks", [])
             lines = []
             for i, t in enumerate(tasks, 1):
+                ac = t.get("acceptance_criteria", [])
+                ac_text = " | ".join(str(item) for item in ac)
                 lines.append(
                     f"{i}. [{t.get('priority','?').upper()}] {t.get('title','?')} "
                     f"(role: {t.get('role','?')})"
                 )
+                if ac_text:
+                    lines.append(f"   AC: {ac_text}")
             parts.append("Tasks from PM:\n" + "\n".join(lines))
         except Exception:
             parts.append(f"Tasks (raw):\n{tasks_json[:500]}")
 
+    if decision_json:
+        try:
+            decisions = json.loads(decision_json).get("decision_log", [])
+            lines = []
+            for i, item in enumerate(decisions, 1):
+                lines.append(
+                    f"{i}. {item.get('decision', '?')} — {item.get('reason', '?')}"
+                )
+            if lines:
+                parts.append("PM decision log:\n" + "\n".join(lines))
+        except Exception:
+            parts.append(f"Decision log (raw):\n{decision_json[:800]}")
+
+    if review_json:
+        try:
+            review = json.loads(review_json)
+            finding_lines = []
+            for i, finding in enumerate(review.get("findings", []), 1):
+                finding_lines.append(
+                    f"{i}. [{finding.get('severity', 'info')}] "
+                    f"{finding.get('area', 'review')}: {finding.get('detail', '')}"
+                )
+            parts.append(
+                "Previous review context:\n"
+                f"Prior verdict: {review.get('verdict', '?')}\n"
+                f"Prior recommendation: {review.get('recommendation', '')}\n"
+                + ("\n".join(finding_lines) if finding_lines else "No prior findings provided.")
+            )
+            if review.get("verdict") in {"changes_requested", "rejected"}:
+                parts.append(
+                    "This is a re-review after requested changes. Check whether the previous findings were actually addressed before approving."
+                )
+        except Exception:
+            parts.append(f"Previous review (raw):\n{review_json[:800]}")
+
     if dev_output:
         try:
             d = json.loads(dev_output)
+            github = d.get("github", {}) or {}
+            file_paths = d.get("files_written", [])
             parts.append(
                 f"Developer output:\n"
                 f"  Branch: {d.get('branch','?')}\n"
+                f"  Commit SHA: {github.get('commit_sha', '?')}\n"
                 f"  Commit message: {d.get('commit_message','?')}\n"
-                f"  Files written: {', '.join(d.get('files_written', []))}"
+                f"  PR number: {github.get('pr_number', '?')}\n"
+                f"  Files written ({len(file_paths)}): {', '.join(file_paths)}"
             )
-            # Include file contents if present (added by slice 5)
-            for f in d.get("files", []):
-                parts.append(
-                    f"\n--- {f['path']} ---\n{f['content'][:3000]}"
-                )
+            file_sections = _format_file_context(d.get("files", []))
+            if file_sections:
+                parts.append("File contents:\n" + file_sections)
         except Exception:
             parts.append(f"Developer output (raw):\n{dev_output[:1000]}")
 
@@ -215,15 +297,37 @@ def _build_user_message(
                 f"Sandbox execution ({status}):\n"
                 f"  exit_code: {s.get('exit_code')}\n"
                 f"  duration: {s.get('duration_seconds')}s\n"
-                f"  stdout:\n{s.get('stdout','')[:1000]}\n"
-                f"  stderr:\n{s.get('stderr','')[:500]}"
+                f"  stdout:\n{s.get('stdout','')}\n"
+                f"  stderr:\n{s.get('stderr','')}"
             )
         except Exception:
             parts.append(f"Sandbox result (raw):\n{sandbox_json[:500]}")
     else:
         parts.append("Sandbox execution: not available for this review.")
 
+    parts.append(
+        "Review checklist:\n"
+        "- verify the implementation against the PM tasks and acceptance criteria\n"
+        "- use sandbox results as evidence when discussing correctness or test coverage\n"
+        "- if previous review findings exist, state whether they were fixed\n"
+        "- keep findings specific to the actual files shown above"
+    )
+
     return "\n\n".join(parts)
+
+
+def _format_file_context(files: list[dict]) -> str:
+    if not isinstance(files, list):
+        return ""
+
+    chunks: list[str] = []
+
+    for file_info in files:
+        path = str(file_info.get("path", "?"))
+        content = str(file_info.get("content", ""))
+        chunks.append(f"--- {path} ---\n{content}")
+
+    return "\n\n".join(chunks)
 
 
 def _resolve_dev_sr_url() -> str:
@@ -262,7 +366,7 @@ def _call_ollama(base_url: str, user_message: str) -> str:
             {"role": "user",   "content": user_message},
         ],
         "format": "json",
-        "options": {"temperature": 0.2, "num_ctx": 8192},
+        "options": {"temperature": 0.2, "num_ctx": DEV_SR_NUM_CTX},
     }
     try:
         response = httpx.post(
@@ -322,4 +426,3 @@ def _call_openai_compat(base_url: str, user_message: str) -> str:
         ) from exc
     except Exception as exc:
         raise RuntimeError(f"Reviewer model call failed: {exc}") from exc
-

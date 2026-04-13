@@ -306,6 +306,7 @@ export type RunStep = {
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;
+  metadata: Record<string, unknown>;
   created_at: string;
 };
 

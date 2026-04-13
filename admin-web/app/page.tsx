@@ -65,6 +65,9 @@ export default async function HomePage() {
           <Link href="/system" className="text-link">
             View system health
           </Link>
+          <Link href="/safety" className="text-link">
+            Safety violations
+          </Link>
         </div>
       </section>
 

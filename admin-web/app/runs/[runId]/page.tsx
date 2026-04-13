@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { ActionForm } from "../../components/action-form";
+import { RunAutoRefresh } from "./run-auto-refresh";
 import {
   apiRequest,
   type Artifact,
@@ -40,6 +41,19 @@ function stepDuration(step: RunStep): string {
   if (!step.started_at || !step.completed_at) return "—";
   const ms = new Date(step.completed_at).getTime() - new Date(step.started_at).getTime();
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function stepActivity(step: RunStep): string | null {
+  const current = step.metadata?.current_activity;
+  if (typeof current === "string" && current.trim()) return current;
+  const last = step.metadata?.last_activity;
+  if (typeof last === "string" && last.trim()) return last;
+  return null;
+}
+
+function stepActivityTimestamp(step: RunStep): string | null {
+  const raw = step.metadata?.activity_updated_at;
+  return typeof raw === "string" && raw.trim() ? raw : null;
 }
 
 async function pauseRunAction(_state: FormState, formData: FormData): Promise<FormState> {
@@ -122,6 +136,12 @@ function StepRow({ step, artifacts }: { step: RunStep; artifacts: Artifact[] }) 
             <span>Completed {formatTimestamp(step.completed_at)}</span>
             <span>Duration {stepDuration(step)}</span>
           </div>
+          {stepActivity(step) ? (
+            <p className="meta">
+              {step.status === "running" ? "Current activity" : "Last activity"}: {stepActivity(step)}
+              {stepActivityTimestamp(step) ? ` (${formatTimestamp(stepActivityTimestamp(step))})` : ""}
+            </p>
+          ) : null}
           {step.error_message ? (
             <p className="step-error">{step.error_message}</p>
           ) : null}
@@ -175,6 +195,7 @@ export default async function RunDetailPage({
           {run.completed_at ? <span>Finished {formatTimestamp(run.completed_at)}</span> : null}
           <Link href="/runs" className="text-link">Back to runs</Link>
         </div>
+        <RunAutoRefresh enabled={run.status === "running"} />
       </section>
 
       {run.error_message ? (

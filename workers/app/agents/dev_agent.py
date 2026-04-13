@@ -39,7 +39,7 @@ DEV_SANDBOX_MAX_ATTEMPTS = max(1, int(os.environ.get("DEV_SANDBOX_MAX_ATTEMPTS",
 # Per-agent provider config — falls back to shared PM_ vars when unset
 DEV_JR_PROVIDER     = os.environ.get("DEV_JR_PROVIDER", "").strip().lower() or PM_LLM_PROVIDER
 DEV_JR_BASE_URL     = os.environ.get("DEV_JR_BASE_URL", "").strip()
-DEV_JR_MODEL        = os.environ.get("DEV_JR_MODEL",    "").strip() or PM_MODEL
+DEV_JR_MODEL        = os.environ.get("DEV_JR_MODEL",    "").strip() or "qwen3.5:9b"
 DEV_JR_API_KEY      = os.environ.get("DEV_JR_API_KEY",  "").strip()
 DEV_JR_REQUEST_TIMEOUT_SECONDS = float(
     os.environ.get("DEV_JR_REQUEST_TIMEOUT_SECONDS", str(PM_REQUEST_TIMEOUT_SECONDS))

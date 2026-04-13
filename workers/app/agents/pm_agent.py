@@ -26,7 +26,7 @@ PM_LLM_PROVIDER = os.environ.get("PM_LLM_PROVIDER", "lmstudio").strip().lower()
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
 PM_BASE_URL = os.environ.get("PM_BASE_URL", "").strip()
 PM_API_KEY = os.environ.get("PM_API_KEY", "").strip()
-PM_MODEL = os.environ.get("PM_MODEL", "qwen2.5-coder:7b")
+PM_MODEL = os.environ.get("PM_MODEL", "qwen3.5:35b-a3b")
 PM_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("PM_REQUEST_TIMEOUT_SECONDS", "600"))
 PM_SERIALIZE_LOCAL_CALLS = os.environ.get("PM_SERIALIZE_LOCAL_CALLS", "true").strip().lower() not in {
     "0",

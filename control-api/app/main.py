@@ -15,6 +15,7 @@ from app.routers.prompt_evals import router as prompt_evals_router
 from app.routers.reconcile import router as reconcile_router
 from app.routers.revisions import router as revisions_router
 from app.routers.runs import router as runs_router
+from app.routers.safety import router as safety_router
 from app.routers.sandbox import router as sandbox_router
 from app.routers.team_members import router as team_members_router
 from app.routers.webhooks import router as webhooks_router
@@ -48,6 +49,7 @@ app.include_router(artifacts_router)
 app.include_router(webhooks_router)
 app.include_router(reconcile_router)
 app.include_router(prompt_evals_router)
+app.include_router(safety_router)
 
 
 @app.get("/")

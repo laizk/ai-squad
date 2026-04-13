@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 import asyncpg
@@ -36,6 +37,48 @@ STALE_RECOVERY_RUN_MSG = (
     "Recovered stale run after worker restart; previous execution was abandoned."
 )
 
+# Exponential backoff base (seconds) for transient step failures: 30s, 60s, 120s
+_RETRY_BACKOFF_BASE = int(os.environ.get("STEP_RETRY_BACKOFF_BASE", "30"))
+
+
+class _TransientStepError(Exception):
+    """Raised when a step fails due to a transient infrastructure issue.
+
+    The execute_step task catches this and schedules a Celery retry with
+    exponential backoff instead of immediately marking the step as failed.
+    """
+
+
+def _record_violation(
+    *,
+    run_id: str | None,
+    step_id: str | None,
+    role: str | None,
+    violation_type: str,
+    severity: str = "warning",
+    detail: str,
+) -> None:
+    """POST a safety violation to control-api. Non-fatal — logs on error."""
+    try:
+        resp = httpx.post(
+            f"{CONTROL_API_URL}/api/v1/safety-violations",
+            json={
+                "run_id": run_id,
+                "step_id": step_id,
+                "role": role,
+                "violation_type": violation_type,
+                "severity": severity,
+                "detail": detail,
+            },
+            timeout=10.0,
+        )
+        if resp.status_code != 201:
+            logger.warning(
+                "safety-violations POST returned %s: %s", resp.status_code, resp.text[:200]
+            )
+    except Exception as exc:
+        logger.warning("safety-violations POST failed (non-fatal): %s", exc)
+
 # Map role → agent/stub module
 STUB_REGISTRY = {
     "pm":     pm_agent,       # real model-backed PM agent (P4)
@@ -46,6 +89,95 @@ STUB_REGISTRY = {
     "ux":     ux_agent,        # UX specialist agent (P8)
     "devops": devops_agent,    # DevOps specialist agent (P8)
 }
+
+
+async def _merge_step_metadata(
+    conn: asyncpg.Connection,
+    step_id: str,
+    values: dict[str, Any],
+) -> None:
+    await conn.execute(
+        """
+        UPDATE run_steps
+           SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb
+         WHERE id = $2
+        """,
+        json.dumps(values),
+        UUID(step_id),
+    )
+
+
+async def _set_step_activity(
+    conn: asyncpg.Connection,
+    step_id: str,
+    message: str,
+    *,
+    stage: str,
+) -> None:
+    await _merge_step_metadata(
+        conn,
+        step_id,
+        {
+            "stage": stage,
+            "current_activity": message,
+            "activity_updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+async def _set_step_last_activity(
+    conn: asyncpg.Connection,
+    step_id: str,
+    message: str,
+    *,
+    stage: str,
+) -> None:
+    await _merge_step_metadata(
+        conn,
+        step_id,
+        {
+            "stage": stage,
+            "current_activity": None,
+            "last_activity": message,
+            "activity_updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def _running_activity_for_step(step: asyncpg.Record) -> tuple[str, str]:
+    role = step["role"]
+    raw_metadata = step.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata = raw_metadata
+    elif isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            metadata = {}
+    else:
+        metadata = {}
+    retry_num = metadata.get("rework_retry")
+
+    if role == "pm":
+        return ("planning", "Generating delivery plan with PM model.")
+    if role == "dev-jr":
+        if retry_num:
+            return ("implementation", f"Implementing requested changes (rework {retry_num}) with dev-jr model.")
+        return ("implementation", "Generating implementation with dev-jr model.")
+    if role == "dev-sr":
+        if retry_num:
+            return ("review", f"Re-reviewing updated implementation after rework {retry_num}.")
+        return ("review", "Reviewing implementation with dev-sr model.")
+    if role == "qa":
+        return ("qa", "Running sandbox-backed QA checks.")
+    if role == "judge":
+        return ("judge", "Scoring the run output with judge model.")
+    if role == "ux":
+        return ("ux", "Reviewing the UX and interaction quality.")
+    if role == "devops":
+        return ("devops", "Reviewing deployment and CI/CD implications.")
+    return ("running", f"Executing {role} step.")
 
 
 async def _recover_stale_execution_state() -> None:
@@ -255,6 +387,8 @@ async def _run_step(run_id: str, step_id: str) -> None:
             datetime.now(timezone.utc),
             UUID(step_id),
         )
+        stage, activity = _running_activity_for_step(step)
+        await _set_step_activity(conn, step_id, activity, stage=stage)
 
         # fetch project details so agents have the brief
         project = await conn.fetchrow(
@@ -303,6 +437,7 @@ async def _run_step(run_id: str, step_id: str) -> None:
         artifacts = stub.run(context)
 
         # validate and persist artifacts
+        await _set_step_activity(conn, step_id, "Persisting step artifacts.", stage="persist")
         last_artifact_id = None
         for art in artifacts:
             if not stub.validate(art["artifact_type"], art["body"]):
@@ -336,6 +471,7 @@ async def _run_step(run_id: str, step_id: str) -> None:
             last_artifact_id,
             UUID(step_id),
         )
+        await _set_step_last_activity(conn, step_id, "Step completed successfully.", stage="completed")
 
         # Rework loop — only fires after a reviewer (dev-sr) step
         if role == "dev-sr":
@@ -362,6 +498,12 @@ async def _run_step(run_id: str, step_id: str) -> None:
                 logger.info("Run %s was no longer running when pause was attempted; skipping", run_id)
             else:
                 logger.info("Run %s paused after step %s (%s)", run_id, step_id, role)
+                await _set_step_last_activity(
+                    conn,
+                    step_id,
+                    "Step completed and the run is awaiting human review.",
+                    stage="paused",
+                )
             return
 
         # find next pending step
@@ -381,9 +523,21 @@ async def _run_step(run_id: str, step_id: str) -> None:
                 datetime.now(timezone.utc),
                 UUID(run_id),
             )
+            await _set_step_last_activity(
+                conn,
+                step_id,
+                "Step completed and the run finished.",
+                stage="completed",
+            )
             logger.info("Run %s completed", run_id)
         else:
             next_id = str(next_step["id"])
+            await _set_step_last_activity(
+                conn,
+                step_id,
+                f"Step completed. Dispatching next step {next_id[:8]}…",
+                stage="dispatch",
+            )
             logger.info("Enqueuing next step %s for run %s", next_id, run_id)
             execute_step.apply_async(
                 kwargs={"run_id": run_id, "step_id": next_id},
@@ -392,6 +546,7 @@ async def _run_step(run_id: str, step_id: str) -> None:
 
     except Exception as exc:
         logger.exception("Step %s failed: %s", step_id, exc)
+        is_transient = _is_transient_error(exc)
         try:
             await conn.execute(
                 """
@@ -408,8 +563,28 @@ async def _run_step(run_id: str, step_id: str) -> None:
                 str(exc),
                 UUID(run_id),
             )
+            await _set_step_last_activity(
+                conn,
+                step_id,
+                f"Step failed: {str(exc)[:300]}",
+                stage="failed",
+            )
         except Exception:
             pass
+
+        # Record validation failures as safety violations so they surface in admin-web
+        if not is_transient and isinstance(exc, ValueError):
+            _record_violation(
+                run_id=run_id,
+                step_id=step_id,
+                role=locals().get("role"),
+                violation_type="model_output_invalid",
+                severity="warning",
+                detail=str(exc)[:2000],
+            )
+
+        if is_transient:
+            raise _TransientStepError(str(exc)) from exc
     finally:
         await conn.close()
 
@@ -525,10 +700,47 @@ async def _maybe_rework(
     return True
 
 
+def _is_transient_error(exc: BaseException) -> bool:
+    """Return True for errors that warrant an automatic retry with backoff.
+
+    Transient: service unavailable (connection refused, read timeout, network
+    errors from httpx, asyncpg connection failures).
+    Permanent: validation errors, missing stubs, model output parsing failures.
+    """
+    import httpx as _httpx
+
+    if isinstance(exc, (_httpx.ConnectError, _httpx.RemoteProtocolError)):
+        return True
+    # asyncpg connection errors travel as the underlying asyncio exceptions
+    msg = str(exc).lower()
+    transient_phrases = (
+        "connection refused",
+        "connection reset",
+        "server disconnected without sending a response",
+        "could not connect",
+        "connection closed",
+        "broken pipe",
+    )
+    return any(phrase in msg for phrase in transient_phrases)
+
+
 @app.task(name="app.tasks.execute_step", bind=True, max_retries=3)
 def execute_step(self, *, run_id: str, step_id: str) -> None:
-    """Execute a single run step using the registered agent module."""
-    asyncio.run(_run_step(run_id, step_id))
+    """Execute a single run step using the registered agent module.
+
+    Transient infrastructure failures (_TransientStepError) are retried up to
+    max_retries times with exponential backoff: base * 2^attempt seconds.
+    """
+    try:
+        asyncio.run(_run_step(run_id, step_id))
+    except _TransientStepError as exc:
+        attempt = self.request.retries  # 0-based
+        countdown = _RETRY_BACKOFF_BASE * (2 ** attempt)  # 30s, 60s, 120s
+        logger.warning(
+            "Step %s transient failure (attempt %d/%d), retrying in %ds: %s",
+            step_id, attempt + 1, self.max_retries + 1, countdown, exc,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 # ── Prompt eval task (P9) ─────────────────────────────────────────────────────

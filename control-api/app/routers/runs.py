@@ -19,7 +19,7 @@ from app.models import (
     RunStatus,
     RunStepStatus,
 )
-from app.revision_utils import utc_value
+from app.revision_utils import json_object, utc_value
 
 router = APIRouter(prefix="/api/v1", tags=["runs"])
 
@@ -36,6 +36,7 @@ def _serialize_step(row: Any) -> dict[str, Any]:
         "started_at": utc_value(row["started_at"]),
         "completed_at": utc_value(row["completed_at"]),
         "error_message": row["error_message"],
+        "metadata": json_object(row["metadata"]),
         "created_at": utc_value(row["created_at"]),
     }
 
@@ -434,22 +435,26 @@ async def cancel_run(run_id: UUID) -> RunResponse:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Cannot cancel a run with status '{row['status']}'",
                 )
+            cancelled_at = datetime.now(timezone.utc)
             await conn.execute(
                 """
                 UPDATE runs
                    SET status = 'cancelled', completed_at = $1
                  WHERE id = $2
                 """,
-                datetime.now(timezone.utc),
+                cancelled_at,
                 run_id,
             )
-            # mark remaining pending steps as skipped
+            # mark remaining pending steps as skipped, preserving audit trail
             await conn.execute(
                 """
                 UPDATE run_steps
-                   SET status = 'skipped'
-                 WHERE run_id = $1 AND status = 'pending'
+                   SET status = 'skipped',
+                       completed_at = $1,
+                       error_message = 'Cancelled by human operator.'
+                 WHERE run_id = $2 AND status = 'pending'
                 """,
+                cancelled_at,
                 run_id,
             )
             row = await _fetch_run_or_404(conn, run_id)

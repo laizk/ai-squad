@@ -505,6 +505,7 @@ class RunStepResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     error_message: str | None
+    metadata: dict[str, Any]
     created_at: datetime
 
 
@@ -596,3 +597,37 @@ class ArtifactContentResponse(BaseModel):
     name: str
     body: str
     created_at: datetime
+
+
+# ── Safety violation models (P10) ────────────────────────────────────────────
+
+class ViolationSeverity(str, Enum):
+    warning = "warning"
+    critical = "critical"
+
+
+class SafetyViolationCreate(BaseModel):
+    run_id: UUID | None = None
+    step_id: UUID | None = None
+    role: str | None = None
+    violation_type: str = Field(min_length=1, max_length=100)
+    severity: ViolationSeverity = ViolationSeverity.warning
+    detail: str = Field(min_length=1)
+
+
+class SafetyViolationResponse(BaseModel):
+    id: UUID
+    run_id: UUID | None
+    step_id: UUID | None
+    role: str | None
+    violation_type: str
+    severity: ViolationSeverity
+    detail: str
+    resolved: bool
+    resolved_at: datetime | None
+    created_at: datetime
+
+
+class SafetyViolationListResponse(BaseModel):
+    total: int
+    items: list[SafetyViolationResponse]
