@@ -259,7 +259,7 @@ def _call_ollama(base_url: str, user_message: str) -> str:
             {"role": "user",   "content": user_message},
         ],
         "format": "json",
-        "options": {"temperature": 0.2},
+        "options": {"temperature": 0.2, "num_ctx": 8192},
     }
     try:
         response = httpx.post(

@@ -152,7 +152,7 @@ def _call_model(user_message: str) -> str:
                     {"role": "user", "content": user_message},
                 ],
                 "format": "json",
-                "options": {"temperature": 0.2},
+                "options": {"temperature": 0.2, "num_ctx": 8192},
             }
             try:
                 resp = httpx.post(f"{base_url}/api/chat", json=payload, timeout=PM_REQUEST_TIMEOUT_SECONDS)

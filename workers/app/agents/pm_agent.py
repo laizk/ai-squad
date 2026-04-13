@@ -212,7 +212,7 @@ def _call_ollama(base_url: str, user_message: str) -> str:
             {"role": "user", "content": user_message},
         ],
         "format": "json",
-        "options": {"temperature": 0.3},
+        "options": {"temperature": 0.3, "num_ctx": 8192},
     }
 
     try:

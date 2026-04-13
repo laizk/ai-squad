@@ -15,6 +15,7 @@ from uuid import UUID
 
 import asyncpg
 import httpx
+from celery.signals import worker_ready
 
 from app.agents import dev_agent, devops_agent, judge_agent, pm_agent, qa_agent, reviewer_agent, ux_agent
 from app.celery_app import app
@@ -30,6 +31,10 @@ CONTROL_API_URL = os.environ.get("CONTROL_API_URL", "http://control-api:8000")
 
 # How many times dev-jr may be reworked before reviewer verdict is accepted as-is
 MAX_REWORK_RETRIES = int(os.environ.get("DEV_REWORK_MAX_RETRIES", "2"))
+STALE_RECOVERY_STEP_MSG = "Recovered stale step after worker restart."
+STALE_RECOVERY_RUN_MSG = (
+    "Recovered stale run after worker restart; previous execution was abandoned."
+)
 
 # Map role → agent/stub module
 STUB_REGISTRY = {
@@ -41,6 +46,125 @@ STUB_REGISTRY = {
     "ux":     ux_agent,        # UX specialist agent (P8)
     "devops": devops_agent,    # DevOps specialist agent (P8)
 }
+
+
+async def _recover_stale_execution_state() -> None:
+    """Fail abandoned running steps/runs so stale queue entries cannot trigger fresh LLM calls."""
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        now = datetime.now(timezone.utc)
+
+        skipped_non_running = await conn.fetchval(
+            """
+            WITH updated AS (
+                UPDATE run_steps AS rs
+                   SET status = 'skipped',
+                       completed_at = $1,
+                       error_message = $2
+                  FROM runs AS r
+                 WHERE rs.run_id = r.id
+                   AND rs.status = 'running'
+                   AND r.status <> 'running'
+                RETURNING 1
+            )
+            SELECT COUNT(*)::int FROM updated
+            """,
+            now,
+            STALE_RECOVERY_STEP_MSG,
+        )
+
+        stale_run_ids = await conn.fetch(
+            """
+            SELECT DISTINCT r.id
+              FROM runs AS r
+              JOIN run_steps AS rs
+                ON rs.run_id = r.id
+             WHERE r.status = 'running'
+               AND rs.status = 'running'
+            """
+        )
+
+        failed_runs = 0
+        failed_running_steps = 0
+        skipped_pending_steps = 0
+
+        for row in stale_run_ids:
+            run_id = row["id"]
+
+            failed_running_steps += await conn.fetchval(
+                """
+                WITH updated AS (
+                    UPDATE run_steps
+                       SET status = 'failed',
+                           completed_at = $1,
+                           error_message = $2
+                     WHERE run_id = $3
+                       AND status = 'running'
+                    RETURNING 1
+                )
+                SELECT COUNT(*)::int FROM updated
+                """,
+                now,
+                STALE_RECOVERY_RUN_MSG,
+                run_id,
+            )
+
+            skipped_pending_steps += await conn.fetchval(
+                """
+                WITH updated AS (
+                    UPDATE run_steps
+                       SET status = 'skipped',
+                           completed_at = $1,
+                           error_message = $2
+                     WHERE run_id = $3
+                       AND status = 'pending'
+                    RETURNING 1
+                )
+                SELECT COUNT(*)::int FROM updated
+                """,
+                now,
+                STALE_RECOVERY_RUN_MSG,
+                run_id,
+            )
+
+            updated = await conn.execute(
+                """
+                UPDATE runs
+                   SET status = 'failed',
+                       completed_at = $1,
+                       error_message = $2
+                 WHERE id = $3
+                   AND status = 'running'
+                """,
+                now,
+                STALE_RECOVERY_RUN_MSG,
+                run_id,
+            )
+            if updated != "UPDATE 0":
+                failed_runs += 1
+
+        if skipped_non_running or failed_runs or failed_running_steps or skipped_pending_steps:
+            logger.warning(
+                "Recovered stale worker state on startup: failed_runs=%d failed_running_steps=%d skipped_pending_steps=%d skipped_non_running_steps=%d",
+                failed_runs,
+                failed_running_steps,
+                skipped_pending_steps,
+                skipped_non_running,
+            )
+    finally:
+        await conn.close()
+
+
+def recover_stale_execution_state_sync() -> None:
+    try:
+        asyncio.run(_recover_stale_execution_state())
+    except Exception:
+        logger.exception("Failed to recover stale worker state on startup")
+
+
+@worker_ready.connect
+def _recover_stale_state_on_worker_ready(sender=None, **kwargs) -> None:
+    recover_stale_execution_state_sync()
 
 
 def _sync_board_issue(run_id: str, project_name: str, brief: str, existing_issue: int | None) -> int | None:

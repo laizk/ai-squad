@@ -20,12 +20,12 @@ def test_ux_validate_good():
             "WCAG AA standards before shipping."
         ),
     })
-    assert ux_agent.validate("ux_notes", body)
+    assert ux_agent.validate("ui_notes", body)
 
 
 def test_ux_validate_bad_severity():
     body = json.dumps({"concerns": [], "severity": "critical", "recommendation": "x" * 80})
-    assert not ux_agent.validate("ux_notes", body)
+    assert not ux_agent.validate("ui_notes", body)
 
 
 def test_ux_validate_wrong_artifact_type():
@@ -35,7 +35,7 @@ def test_ux_validate_wrong_artifact_type():
 
 def test_ux_validate_missing_key():
     body = json.dumps({"concerns": [], "severity": "low"})  # missing recommendation
-    assert not ux_agent.validate("ux_notes", body)
+    assert not ux_agent.validate("ui_notes", body)
 
 
 def test_devops_validate_good():

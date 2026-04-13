@@ -1,6 +1,6 @@
 """UX agent — reviews PM spec and developer output for user experience concerns.
 
-Produces a ux_notes artifact with concerns, severity, and a recommendation.
+Produces a ui_notes artifact with concerns, severity, and a recommendation.
 Runs after PM planning and before dev-jr so UX risks are visible before
 implementation begins.
 """
@@ -102,14 +102,14 @@ def run(context: dict) -> list[dict]:
         )
 
     return [{
-        "artifact_type": "ux_notes",
+        "artifact_type": "ui_notes",
         "name": "ux_review.json",
         "body": json.dumps({"concerns": concerns, "severity": severity, "recommendation": recommendation}, indent=2),
     }]
 
 
 def validate(artifact_type: str, body: str) -> bool:
-    if artifact_type != "ux_notes":
+    if artifact_type != "ui_notes":
         return False
     try:
         data = json.loads(body)
@@ -147,7 +147,7 @@ def _call_model(user_message: str) -> str:
                     {"role": "user", "content": user_message},
                 ],
                 "format": "json",
-                "options": {"temperature": 0.2},
+                "options": {"temperature": 0.2, "num_ctx": 8192},
             }
             try:
                 resp = httpx.post(f"{base_url}/api/chat", json=payload, timeout=PM_REQUEST_TIMEOUT_SECONDS)
